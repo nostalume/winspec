@@ -64,10 +64,24 @@ BeforeAll {
 
 Describe "Import-Spec" {
     It "Should import valid specification file" {
-        $specPath = "$PSScriptRoot\..\specs\minimal.ps1"
-        $result = Import-Spec -Path $specPath
-        $result | Should -Not -BeNullOrEmpty
-        $result.Name | Should -Be "minimal"
+        # Create a temp spec file dynamically
+        $tempFile = Join-Path $env:TEMP "valid-spec-$(Get-Random).ps1"
+        @'
+@{
+    Name = "minimal"
+    Description = "Test spec"
+    Registry = @{}
+}
+'@ | Out-File $tempFile -Force
+        
+        try {
+            $result = Import-Spec -Path $tempFile
+            $result | Should -Not -BeNullOrEmpty
+            $result.Name | Should -Be "minimal"
+        }
+        finally {
+            Remove-Item $tempFile -ErrorAction SilentlyContinue
+        }
     }
     
     It "Should return null for non-existent file" {

@@ -3,64 +3,28 @@
 BeforeAll {
     Import-Module "$PSScriptRoot\..\logging.psm1" -Force
     Import-Module "$PSScriptRoot\..\schema.psm1" -Force
-    
-    # Mock all registry operations
-    Mock Get-ItemProperty { 
-        param($Path, $Name)
-        # Return mock registry values based on property name
-        switch ($Name) {
-            "Hidden" { return @{ Hidden = 1 } }
-            "HideFileExt" { return @{ HideFileExt = 0 } }
-            "EnableClipboardHistory" { return @{ EnableClipboardHistory = 1 } }
-            "AppsUseLightTheme" { return @{ AppsUseLightTheme = 0 } }
-            default { return @{ $Name = 1 } }
-        }
-    }
-    Mock Set-ItemProperty { }
-    Mock New-Item { return @{ FullName = "MockPath" } }
-    Mock Test-Path { return $true }
-    
-    # Mock service operations
-    Mock Get-Service { 
-        param($Name)
-        return [PSCustomObject]@{ 
-            Status = "Running"
-            Name = $Name
-        }
-    }
-    Mock Get-WmiObject { 
-        return [PSCustomObject]@{ StartMode = "Automatic" }
-    }
-    Mock Set-Service { }
-    Mock Start-Service { }
-    Mock Stop-Service { }
-    
-    # Mock Windows feature operations
-    Mock Get-WindowsOptionalFeature { 
-        param($FeatureName)
-        return [PSCustomObject]@{ 
-            State = "Enabled"
-            Name = $FeatureName
-        }
-    }
-    Mock Enable-WindowsOptionalFeature { }
-    Mock Disable-WindowsOptionalFeature { }
-    
-    # Mock Scoop/package operations
-    Mock Get-Command { 
-        param($Name)
-        if ($Name -eq "scoop") {
-            return [PSCustomObject]@{ Name = "scoop" }
-        }
-        return $null
-    }
-    Mock Invoke-RestMethod { return "mock script content" }
 }
 
 Describe "Registry Provider" {
     BeforeAll {
         # Import only the registry module for this test block
         Import-Module "$PSScriptRoot\..\managers\registry.psm1" -Force
+        
+        # Mock registry operations within the module scope
+        Mock Get-ItemProperty -ModuleName registry { 
+            param($Path, $Name)
+            switch ($Name) {
+                "Hidden" { return @{ Hidden = 1 } }  # $true = 1 per registry-maps
+                "HideFileExt" { return @{ HideFileExt = 0 } }  # $true = 0 per registry-maps
+                "EnableClipboardHistory" { return @{ EnableClipboardHistory = 1 } }
+                "AppsUseLightTheme" { return @{ AppsUseLightTheme = 0 } }
+                "TestProp" { return @{ TestProp = 1 } }
+                default { return @{ $Name = 1 } }
+            }
+        } -Verifiable
+        Mock Set-ItemProperty -ModuleName registry { }
+        Mock New-Item -ModuleName registry { return @{ FullName = "MockPath" } }
+        Mock Test-Path -ModuleName registry { return $true }
     }
     
     Context "Get-ProviderInfo" {
@@ -78,7 +42,7 @@ Describe "Registry Provider" {
         }
         
         It "Should return default for missing key" {
-            Mock Get-ItemProperty { return $null }
+            Mock Get-ItemProperty -ModuleName registry { return $null }
             $result = Get-RegistryValue -Path "HKCU:\Missing" -Property "Test" -Default "default"
             $result | Should -Be "default"
         }
@@ -130,6 +94,21 @@ Describe "Service Provider" {
     BeforeAll {
         # Import only the service module for this test block
         Import-Module "$PSScriptRoot\..\managers\service.psm1" -Force
+        
+        # Mock service operations within the module scope
+        Mock Get-Service -ModuleName service { 
+            param($Name)
+            return [PSCustomObject]@{ 
+                Status = "Running"
+                Name = $Name
+            }
+        }
+        Mock Get-WmiObject -ModuleName service { 
+            return [PSCustomObject]@{ StartMode = "Automatic" }
+        }
+        Mock Set-Service -ModuleName service { }
+        Mock Start-Service -ModuleName service { }
+        Mock Stop-Service -ModuleName service { }
     }
     
     Context "Get-ProviderInfo" {
@@ -185,6 +164,17 @@ Describe "Feature Provider" {
     BeforeAll {
         # Import only the feature module for this test block
         Import-Module "$PSScriptRoot\..\managers\feature.psm1" -Force
+        
+        # Mock Windows feature operations within the module scope
+        Mock Get-WindowsOptionalFeature -ModuleName feature { 
+            param($FeatureName)
+            return [PSCustomObject]@{ 
+                State = "Enabled"
+                FeatureName = $FeatureName
+            }
+        }
+        Mock Enable-WindowsOptionalFeature -ModuleName feature { }
+        Mock Disable-WindowsOptionalFeature -ModuleName feature { }
     }
     
     Context "Get-ProviderInfo" {
@@ -238,6 +228,17 @@ Describe "Package Provider" {
     BeforeAll {
         # Import only the package module for this test block
         Import-Module "$PSScriptRoot\..\managers\package.psm1" -Force
+        
+        # Mock package operations within the module scope
+        Mock Get-Command -ModuleName package { 
+            param($Name)
+            if ($Name -eq "scoop") {
+                return [PSCustomObject]@{ Name = "scoop" }
+            }
+            return $null
+        }
+        Mock Invoke-RestMethod -ModuleName package { return "mock script content" }
+        Mock Invoke-Expression -ModuleName package { }
     }
     
     Context "Get-ProviderInfo" {
