@@ -115,33 +115,7 @@ function Test-SpecSchema {
     return $true
 }
 
-function Get-ProviderInfo {
-    param (
-        [Parameter(Mandatory = $true)]
-        [string]$Name
-    )
-    
-    $declarativeProviders = @("Registry", "Package", "Service", "Feature")
-    $triggerProviders = @("Activation", "Debloat", "Office")
-    
-    if ($Name -in $declarativeProviders) {
-        return @{
-            Name = $Name
-            Type = [ProviderType]::Declarative
-        }
-    }
-    elseif ($Name -in $triggerProviders) {
-        return @{
-            Name = $Name
-            Type = [ProviderType]::Trigger
-        }
-    }
-    
-    return $null
-}
-
 Export-ModuleMember -Function @(
     "Get-SpecSchema"
     "Test-SpecSchema"
-    "Get-ProviderInfo"
 )

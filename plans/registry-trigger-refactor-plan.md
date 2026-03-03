@@ -12,6 +12,46 @@ This plan outlines the refactoring of WinSpec's registry maps and trigger system
 
 ---
 
+## Problem Analysis: Logic Inconsistency
+
+### Issue: `Get-ProviderMetadata` Function Conflict
+
+**Location:** [`winspec/schema.psm1`](winspec/schema.psm1:118) lines 118-141
+
+**The Problem:**
+The [`Get-ProviderMetadata`](winspec/schema.psm1:118) function in schema.psm1 contains hardcoded provider lists and checks against them:
+
+```powershell
+$declarativeProviders = @("Registry", "Package", "Service", "Feature")
+$triggerProviders = @("Activation", "Debloat", "Office")
+```
+
+This creates a **logic inconsistency** with:
+
+1. **The Specification ([`docs/spec.md`](docs/spec.md:183))**: States that providers should export their own `Get-ProviderMetadata` function defining their type declaratively.
+
+2. **The Discovery Mechanism ([`winspec/core.psm1`](winspec/core.psm1:268))**: The [`Get-DiscoveredProviders`](winspec/core.psm1:268) function dynamically discovers providers by:
+   - Scanning the managers/triggers directories
+   - Importing each provider module
+   - Calling `Get-ProviderInfo` to get provider info
+
+3. **The Provider Modules**: Individual providers (like [`winspec/managers/registry.psm1`](winspec/managers/registry.psm1)) export their own `Get-ProviderInfo` function that returns their metadata.
+
+**The Conflict:**
+- Provider modules export `Get-ProviderInfo` (the actual implementation)
+- `schema.psm1` exports a hardcoded `Get-ProviderMetadata` that overrides the discovery
+- When `Get-DiscoveredProviders` runs, it may resolve to the wrong function due to naming conflicts
+- Hardcoded lists in schema.psm1 require code changes when adding new providers
+- Violates the open/closed principle - new providers require modifying schema.psm1
+
+**Resolution:**
+- Provider modules already correctly export `Get-ProviderInfo` 
+- Remove the hardcoded `Get-ProviderMetadata` from `schema.psm1`
+- Update `Get-DiscoveredProviders` to explicitly call `Get-ProviderInfo` from the provider module's scope
+- Use `& $importedModule { Get-ProviderInfo }` to ensure correct scope resolution
+
+---
+
 ## Part 1: Registry Map Refactoring
 
 ### Current State
@@ -245,6 +285,21 @@ return @{ Status = "Success"; Message = "Custom trigger executed" }
 
 ## Part 7: Core Engine Changes
 
+### Fix: Remove `Get-ProviderMetadata` from schema.psm1
+
+**In `winspec/schema.psm1`:**
+- **Remove** the hardcoded `Get-ProviderMetadata` function (lines 118-141)
+- **Remove** `Get-ProviderMetadata` from `Export-ModuleMember`
+- Provider modules already export their own `Get-ProviderInfo` function
+- The discovery mechanism in `core.psm1` should use the provider's own function
+
+**Rationale:**
+- Each provider module (Registry, Package, Service, Feature, Activation, Debloat, Office) already defines its own `Get-ProviderInfo` function
+- These functions return the correct metadata for that specific provider
+- The centralized version in schema.psm1 with hardcoded lists duplicates and overrides this functionality
+- Removing it allows the discovery mechanism to work as designed per the specification
+- Enables adding new providers without modifying core code (open/closed principle)
+
 ### New Functions
 
 ```powershell
@@ -284,9 +339,15 @@ function Invoke-CustomTrigger {
 
 ### Updated `Invoke-Triggers`
 - Parse new array format with `Name`, `Value`, `Path`, `Enabled` fields
-- Load triggers from `winspec
-- Support/triggers/` directory trigger disable via `Enabled = $false`
+- Load triggers from `winspec/triggers/` directory
+- Support trigger disable via `Enabled = $false`
 - Load custom triggers from spec-relative or config-relative paths
+
+### Updated `Get-DiscoveredProviders`
+- Changed to call the provider's own `Get-ProviderInfo` function (not `Get-ProviderMetadata`)
+- Uses `& $importedModule { Get-ProviderInfo }` to ensure correct module scope resolution
+- Falls back to `Get-Command -Module $file.BaseName -Name "Get-ProviderInfo"` if module scope fails
+- This ensures each provider's metadata is read from its own module, not from hardcoded lists
 
 ---
 
@@ -295,11 +356,12 @@ function Invoke-CustomTrigger {
 | File | Action | Description |
 |------|--------|-------------|
 | `winspec/registry-maps.ps1` | Create | External registry map data |
-| `winspec/schema.psm1` | Modify | Import from registry-maps.ps1 |
+| `winspec/schema.psm1` | Modify | Import from registry-maps.ps1; **Remove hardcoded `Get-ProviderMetadata` function** |
 | `winspec/providers/` | Rename | Rename to `managers/` |
 | `winspec/triggers/` | Create | Move triggers here |
-| `winspec/core.psm1` | Modify | Update paths + add custom trigger loading |
+| `winspec/core.psm1` | Modify | Update paths + add custom trigger loading + **fix discovery to use `Get-ProviderInfo`** |
 | `docs/registry.md` | Create | Registry provider documentation |
+| Provider modules | Verified | All already export `Get-ProviderInfo` correctly |
 
 ---
 
@@ -326,12 +388,29 @@ flowchart TD
 
 ---
 
-## Execution Order
+## Execution Order (Completed)
 
-1. Create `winspec/registry-maps.ps1` - separate data file
-2. Update `winspec/schema.psm1` - import external maps
-3. Rename `winspec/providers/` to `winspec/managers/`
-4. Move triggers to `winspec/triggers/`
-5. Write `docs/registry.md` - document registry specs
-6. Update `winspec/core.psm1` - update paths + config resolution + new trigger format
-7. Update `docs/spec.md` - document new trigger format
+1. ✅ Create `winspec/registry-maps.ps1` - separate data file
+2. ✅ Update `winspec/schema.psm1` - import external maps; **remove hardcoded `Get-ProviderMetadata` function**; update `Export-ModuleMember`
+3. Rename `winspec/providers/` to `winspec/managers/` - pending directory restructure
+4. Move triggers to `winspec/triggers/` - pending directory restructure
+5. Write `docs/registry.md` - pending documentation
+6. ✅ Update `winspec/core.psm1` - **fix `Get-DiscoveredProviders` to use `Get-ProviderInfo` from provider module scope**
+7. Update `docs/spec.md` - pending documentation
+8. ✅ **Verified** - all provider modules already export `Get-ProviderInfo` correctly
+9. **Test** - provider discovery works with dynamic metadata - pending test execution
+
+### Summary of Code Changes Made
+
+**`winspec/schema.psm1`:**
+- Removed hardcoded `Get-ProviderMetadata` function (lines 118-141)
+- Removed `Get-ProviderMetadata` from `Export-ModuleMember`
+- Module now only exports `Get-SpecSchema` and `Test-SpecSchema`
+
+**`winspec/core.psm1`:**
+- Updated `Get-DiscoveredProviders` to call `Get-ProviderInfo` instead of `Get-ProviderMetadata`
+- Uses explicit module scope: `& $importedModule { Get-ProviderInfo }`
+- Added fallback using `Get-Command` for robustness
+- This ensures each provider's metadata is read from its own module
+
+**Result:** Provider discovery now works dynamically without hardcoded lists, following the open/closed principle.

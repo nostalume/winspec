@@ -21,7 +21,7 @@ param (
     [switch]$WithTriggers,
     
     [Parameter(ParameterSetName = "Trigger")]
-    [string]$Name,
+    [string[]]$Name,
     
     [Parameter(ParameterSetName = "Trigger")]
     $Option,
@@ -70,8 +70,10 @@ APPLY OPTIONS:
     -WithTriggers   Include trigger execution
 
 TRIGGER OPTIONS:
-    -Name           Trigger name (activation, debloat, office)
-    -Option         Trigger-specific option
+    -Name           Trigger name(s) - single string or array
+                    Omit to run all available triggers
+                    Examples: "activation", @("activation", "debloat")
+    -Option         Trigger-specific option (applied to all specified triggers)
 
 ROLLBACK OPTIONS:
     -SequenceNumber Restore point sequence number
@@ -96,9 +98,13 @@ EXAMPLES:
     # Show current system state
     .\winspec.ps1 status
 
-    # Run specific trigger
+    # Run specific trigger(s)
     .\winspec.ps1 trigger -Name activation
     .\winspec.ps1 trigger -Name debloat -Option "silent"
+    .\winspec.ps1 trigger -Name @("activation", "debloat")
+    
+    # Run all available triggers
+    .\winspec.ps1 trigger
 
     # Rollback to last checkpoint
     .\winspec.ps1 rollback -Last
@@ -117,9 +123,7 @@ function Show-Providers {
     )
     
     # Resolve config location if not provided
-    if (-not $ConfigPath) {
-        $ConfigPath = Resolve-ConfigLocation
-    }
+    $resolvedConfigPath = if ($ConfigPath) { $ConfigPath } else { Resolve-ConfigLocation }
     
     Write-Host ""
     Write-Host "Available Providers" -ForegroundColor Cyan
@@ -131,12 +135,18 @@ function Show-Providers {
     
     # Built-in managers
     $managersPath = Join-Path $Script:WinspecRoot "managers"
-    Discover-ProvidersFromPath -Path $managersPath -Type "Declarative" -IsUserProvider $false
+    $builtInDeclarative = Get-DiscoveredProviders -Path $managersPath -Type "Declarative"
+    foreach ($provider in $builtInDeclarative) {
+        Write-Host "  $provider" -ForegroundColor White
+    }
     
     # User managers from config
-    if ($ConfigPath) {
-        $userManagersPath = Join-Path $ConfigPath "managers"
-        Discover-ProvidersFromPath -Path $userManagersPath -Type "Declarative" -IsUserProvider $true
+    if ($resolvedConfigPath) {
+        $userManagersPath = Join-Path $resolvedConfigPath "managers"
+        $userDeclarative = Get-DiscoveredProviders -Path $userManagersPath -Type "Declarative"
+        foreach ($provider in $userDeclarative) {
+            Write-Host "  $provider [User]" -ForegroundColor Gray
+        }
     }
     
     # Discover trigger providers from triggers/
@@ -145,12 +155,18 @@ function Show-Providers {
     
     # Built-in triggers
     $triggersPath = Join-Path $Script:WinspecRoot "triggers"
-    Discover-ProvidersFromPath -Path $triggersPath -Type "Trigger" -IsUserProvider $false
+    $builtInTriggers = Get-DiscoveredProviders -Path $triggersPath -Type "Trigger"
+    foreach ($trigger in $builtInTriggers) {
+        Write-Host "  $trigger" -ForegroundColor White
+    }
     
     # User triggers from config
-    if ($ConfigPath) {
-        $userTriggersPath = Join-Path $ConfigPath "triggers"
-        Discover-ProvidersFromPath -Path $userTriggersPath -Type "Trigger" -IsUserProvider $true
+    if ($resolvedConfigPath) {
+        $userTriggersPath = Join-Path $resolvedConfigPath "triggers"
+        $userTriggers = Get-DiscoveredProviders -Path $userTriggersPath -Type "Trigger"
+        foreach ($trigger in $userTriggers) {
+            Write-Host "  $trigger [User]" -ForegroundColor Gray
+        }
     }
     
     Write-Host ""
@@ -174,7 +190,13 @@ function Invoke-Validate {
     
     $resolved = Resolve-Spec -Config $config -BasePath (Split-Path $SpecPath -Parent)
     
-    if (Test-Spec -Config $resolved) {
+    # Resolve config location for validation context
+    $configLocation = Resolve-ConfigLocation -ConfigPath $ConfigPath
+    if ($configLocation) {
+        Write-Log -Level "INFO" -Message "Using configuration location: $configLocation"
+    }
+    
+    if (Test-SpecSchema -Config $resolved) {
         Write-Log -Level "OK" -Message "Specification is valid"
         Write-Host ""
         Write-Host "Resolved configuration:" -ForegroundColor Cyan
@@ -186,20 +208,44 @@ function Invoke-Validate {
 }
 
 function Invoke-TriggerCommand {
+    [CmdletBinding()]
     param (
-        [string]$TriggerName,
+        [Parameter(Mandatory = $false)]
+        [string[]]$TriggerNames,
+        
+        # TODO: option is apply to all trigger.
+        [Parameter(Mandatory = $false)]
         $TriggerOption,
-        [string]$ConfigPath
+        
+        [Parameter(Mandatory = $false)]
+        [string]$ConfigPath,
+        
+        [Parameter(Mandatory = $false)]
+        [string]$SpecPath
     )
     
-    if (-not $TriggerName) {
-        Write-Log -Level "ERROR" -Message "Trigger name required: -Name <trigger>"
-        Write-Host "Available triggers: activation, debloat, office"
-        return
+    # Resolve config location if not provided
+    $resolvedConfigPath = if ($ConfigPath) { $ConfigPath } else { Resolve-ConfigLocation }
+    
+    # If no trigger names specified, discover all available triggers
+    if (-not $TriggerNames -or $TriggerNames.Count -eq 0) {
+        $TriggerNames = Get-AllTriggers -ConfigPath $resolvedConfigPath
+        
+        if ($TriggerNames.Count -eq 0) {
+            Write-Log -Level "ERROR" -Message "No triggers found"
+            return
+        }
+        
+        Write-Log -Level "INFO" -Message "Running all available triggers: $($TriggerNames -join ', ')"
     }
     
-    $triggerConfig = @(@{ Name = $TriggerName; Value = $TriggerOption })
-    $results = Invoke-Triggers -TriggerConfig $triggerConfig -ConfigPath $ConfigPath
+    # Build trigger config array
+    $triggerConfig = @()
+    foreach ($name in $TriggerNames) {
+        $triggerConfig += @{ Name = $name; Value = $TriggerOption }
+    }
+    
+    $results = Invoke-Triggers -TriggerConfig $triggerConfig -SpecPath $SpecPath -ConfigPath $resolvedConfigPath
     Write-Report -Results $results
 }
 
@@ -219,7 +265,7 @@ switch ($Command) {
     }
     
     "trigger" {
-        Invoke-TriggerCommand -TriggerName $Name -TriggerOption $Option -ConfigPath $ConfigPath
+        Invoke-TriggerCommand -TriggerNames $Name -TriggerOption $Option -ConfigPath $ConfigPath -SpecPath $null
     }
     
     "status" {

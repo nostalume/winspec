@@ -229,9 +229,13 @@ Apply the configuration:
 # Apply with checkpoint (create restore point first)
 .\winspec\winspec.ps1 apply -Spec .\myconfig.ps1 -Checkpoint
 
-# Run specific trigger
+# Run specific trigger(s)
 .\winspec\winspec.ps1 trigger -Name activation
 .\winspec\winspec.ps1 trigger -Name debloat -Option "silent"
+.\winspec\winspec.ps1 trigger -Name @("activation", "debloat")
+
+# Run all available triggers
+.\winspec\winspec.ps1 trigger
 
 # Rollback to last checkpoint
 .\winspec\winspec.ps1 rollback -Last

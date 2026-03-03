@@ -185,7 +185,7 @@ Trigger = @(
 ### Declarative Provider Contract
 
 ```powershell
-function Get-ProviderInfo {
+function Get-ProviderMetadata {
     return @{ Name = "Example"; Type = "Declarative"; Description = "..." }
 }
 
@@ -199,13 +199,13 @@ function Set-ExampleState {
     return @{ Status = "Applied"/"AlreadySet"/"Error"/"DryRun"; Message = "..." }
 }
 
-Export-ModuleMember Get-ProviderInfo, Test-ExampleState, Set-ExampleState
+Export-ModuleMember Get-ProviderMetadata, Test-ExampleState, Set-ExampleState
 ```
 
 ### Trigger Provider Contract
 
 ```powershell
-function Get-ProviderInfo {
+function Get-ProviderMetadata {
     return @{ Name = "Example"; Type = "Trigger"; Description = "..." }
 }
 
@@ -214,7 +214,7 @@ function Invoke-ExampleTrigger {
     return @{ Status = "Success"/"Error"/"DryRun"/"Skipped"; Message = "..." }
 }
 
-Export-ModuleMember Get-ProviderInfo, Invoke-ExampleTrigger
+Export-ModuleMember Get-ProviderMetadata, Invoke-ExampleTrigger
 ```
 
 ### Declarative Template
@@ -222,7 +222,7 @@ Export-ModuleMember Get-ProviderInfo, Invoke-ExampleTrigger
 ```powershell
 Import-Module (Join-Path $PSScriptRoot "..\logging.psm1") -Force
 
-function Get-ProviderInfo { ... }
+function Get-ProviderMetadata { ... }
 
 function Get-MyProviderState { param ([string]$ItemName) }
 
@@ -267,7 +267,7 @@ function Set-MyProviderState {
 ```powershell
 Import-Module (Join-Path $PSScriptRoot "..\logging.psm1") -Force
 
-function Get-ProviderInfo { ... }
+function Get-ProviderMetadata { ... }
 
 function Invoke-MyTriggerTrigger {
     [CmdletBinding(SupportsShouldProcess = $true)]
@@ -341,7 +341,7 @@ BeforeAll {
 
 Describe "MyProvider" {
     It "Returns correct provider info" {
-        $info = Get-ProviderInfo
+        $info = Get-ProviderMetadata
         $info.Name | Should -Be "MyProvider"
     }
 }

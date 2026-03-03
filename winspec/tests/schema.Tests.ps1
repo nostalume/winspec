@@ -163,23 +163,6 @@ Describe "Test-SpecSchema" {
     }
 }
 
-Describe "Get-ProviderInfo" {
-    It "Should return info for declarative providers" {
-        $info = Get-ProviderInfo -Name "Registry"
-        $info | Should -Not -BeNullOrEmpty
-        $info.Name | Should -Be "Registry"
-        $info.Type | Should -Be "Declarative"
-    }
-    
-    It "Should return info for trigger providers" {
-        $info = Get-ProviderInfo -Name "Activation"
-        $info | Should -Not -BeNullOrEmpty
-        $info.Name | Should -Be "Activation"
-        $info.Type | Should -Be "Trigger"
-    }
-    
-    It "Should return null for unknown provider" {
-        $info = Get-ProviderInfo -Name "UnknownProvider"
-        $info | Should -BeNullOrEmpty
-    }
-}
+# Note: Get-ProviderMetadata function has been removed from schema.psm1
+# Provider metadata is now handled by individual provider modules via Get-ProviderInfo
+# See individual provider tests in providers.Tests.ps1 and triggers.Tests.ps1

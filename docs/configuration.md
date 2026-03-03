@@ -254,11 +254,23 @@ Specifications can import other specifications. Later specs override earlier one
 .\winspec.ps1 apply -Spec .\my-config.ps1 -Checkpoint
 ```
 
-### Run Specific Trigger
+### Run Triggers
 
+Run a single trigger:
 ```powershell
 .\winspec.ps1 trigger -Name activation
 .\winspec.ps1 trigger -Name debloat -Option "silent"
+```
+
+Run multiple triggers:
+```powershell
+.\winspec.ps1 trigger -Name @("activation", "debloat")
+.\winspec.ps1 trigger -Name @("activation", "debloat") -Option "silent"
+```
+
+Run all available triggers:
+```powershell
+.\winspec.ps1 trigger
 ```
 
 ### Validate Without Applying

@@ -151,22 +151,26 @@ Describe "Resolve-Spec" {
     }
 }
 
-Describe "Test-Spec" {
+Describe "Test-SpecSchema" {
     It "Should validate correct specification" {
-        $config = @{
-            Name = "test"
-            Registry = @{ Explorer = @{ ShowHidden = $true } }
+        InModuleScope schema {
+            $config = @{
+                Name = "test"
+                Registry = @{ Explorer = @{ ShowHidden = $true } }
+            }
+            
+            Test-SpecSchema -Config $config | Should -Be $true
         }
-        
-        Test-Spec -Config $config | Should -Be $true
     }
     
     It "Should reject invalid specification" {
-        $config = @{
-            Registry = @{ UnknownCategory = @{ Prop = $true } }
+        InModuleScope schema {
+            $config = @{
+                Registry = @{ UnknownCategory = @{ Prop = $true } }
+            }
+            
+            Test-SpecSchema -Config $config | Should -Be $false
         }
-        
-        Test-Spec -Config $config | Should -Be $false
     }
 }
 
@@ -214,19 +218,19 @@ Describe "Find-TriggerScript" {
 }
 
 Describe "Import-Manager" {
-    It "Should return null for non-existent manager" {
+    It "Should return false for non-existent manager" {
         Mock Test-Path { return $false }
-        
+
         $result = Import-Manager -Name "NonExistent"
-        $result | Should -BeNullOrEmpty
+        $result | Should -Be $false
     }
 }
 
 Describe "Import-BuiltInTrigger" {
-    It "Should return null for non-existent trigger" {
+    It "Should return false for non-existent trigger" {
         Mock Test-Path { return $false }
-        
+
         $result = Import-BuiltInTrigger -Name "NonExistent"
-        $result | Should -BeNullOrEmpty
+        $result | Should -Be $false
     }
 }

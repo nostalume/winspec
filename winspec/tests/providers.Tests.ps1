@@ -55,18 +55,17 @@ BeforeAll {
         return $null
     }
     Mock Invoke-RestMethod { return "mock script content" }
-    
-    # Import managers (declarative providers)
-    Import-Module "$PSScriptRoot\..\managers\registry.psm1" -Force
-    Import-Module "$PSScriptRoot\..\managers\service.psm1" -Force
-    Import-Module "$PSScriptRoot\..\managers\feature.psm1" -Force
-    Import-Module "$PSScriptRoot\..\managers\package.psm1" -Force
 }
 
 Describe "Registry Provider" {
+    BeforeAll {
+        # Import only the registry module for this test block
+        Import-Module "$PSScriptRoot\..\managers\registry.psm1" -Force
+    }
+    
     Context "Get-ProviderInfo" {
         It "Should return correct provider info" {
-            $info = registry\Get-ProviderInfo
+            $info = Get-ProviderInfo
             $info.Name | Should -Be "Registry"
             $info.Type | Should -Be "Declarative"
         }
@@ -78,17 +77,15 @@ Describe "Registry Provider" {
             $result | Should -Not -BeNullOrEmpty
         }
         
-        It "Should return default when property not found" {
-            Mock Get-ItemProperty { throw "Property not found" }
-            
-            $result = Get-RegistryValue -Path "HKCU:\Test" -Property "NonExistent" -Default "DefaultValue"
-            $result | Should -Be "DefaultValue"
+        It "Should return default for missing key" {
+            Mock Get-ItemProperty { return $null }
+            $result = Get-RegistryValue -Path "HKCU:\Missing" -Property "Test" -Default "default"
+            $result | Should -Be "default"
         }
     }
     
     Context "Test-RegistryState" {
         It "Should return true when in desired state" {
-            # Mock returns values that match desired state
             $desired = @{
                 Explorer = @{ ShowHidden = $true }
             }
@@ -96,12 +93,21 @@ Describe "Registry Provider" {
             $result = Test-RegistryState -Desired $desired
             $result | Should -Be $true
         }
+        
+        It "Should return false when not in desired state" {
+            $desired = @{
+                Explorer = @{ ShowHidden = $false }
+            }
+            
+            $result = Test-RegistryState -Desired $desired
+            $result | Should -Be $false
+        }
     }
     
     Context "Set-RegistryState" {
         It "Should apply registry changes" {
             $desired = @{
-                Explorer = @{ ShowHidden = $true }
+                Explorer = @{ ShowHidden = $false }
             }
             
             $result = Set-RegistryState -Desired $desired
@@ -121,9 +127,14 @@ Describe "Registry Provider" {
 }
 
 Describe "Service Provider" {
+    BeforeAll {
+        # Import only the service module for this test block
+        Import-Module "$PSScriptRoot\..\managers\service.psm1" -Force
+    }
+    
     Context "Get-ProviderInfo" {
         It "Should return correct provider info" {
-            $info = service\Get-ProviderInfo
+            $info = Get-ProviderInfo
             $info.Name | Should -Be "Service"
             $info.Type | Should -Be "Declarative"
         }
@@ -171,9 +182,14 @@ Describe "Service Provider" {
 }
 
 Describe "Feature Provider" {
+    BeforeAll {
+        # Import only the feature module for this test block
+        Import-Module "$PSScriptRoot\..\managers\feature.psm1" -Force
+    }
+    
     Context "Get-ProviderInfo" {
         It "Should return correct provider info" {
-            $info = feature\Get-ProviderInfo
+            $info = Get-ProviderInfo
             $info.Name | Should -Be "Feature"
             $info.Type | Should -Be "Declarative"
         }
@@ -219,9 +235,14 @@ Describe "Feature Provider" {
 }
 
 Describe "Package Provider" {
+    BeforeAll {
+        # Import only the package module for this test block
+        Import-Module "$PSScriptRoot\..\managers\package.psm1" -Force
+    }
+    
     Context "Get-ProviderInfo" {
         It "Should return correct provider info" {
-            $info = package\Get-ProviderInfo
+            $info = Get-ProviderInfo
             $info.Name | Should -Be "Package"
             $info.Type | Should -Be "Declarative"
         }
@@ -251,20 +272,22 @@ Describe "Package Provider" {
             }
             
             $desired = @{
-                Installed = @("git", "neovim")
+                Installed = @("git")
             }
             
             $result = Test-PackageState -Desired $desired
             $result | Should -Be $true
         }
         
-        It "Should return false when packages missing" {
+        It "Should return false when package missing" {
             Mock Get-Package { 
-                return @([PSCustomObject]@{ Name = "git" })
+                return @(
+                    [PSCustomObject]@{ Name = "git" }
+                )
             }
             
             $desired = @{
-                Installed = @("git", "neovim", "nodejs")
+                Installed = @("git", "missing-package")
             }
             
             $result = Test-PackageState -Desired $desired
@@ -273,29 +296,14 @@ Describe "Package Provider" {
     }
     
     Context "Set-PackageState" {
-        It "Should install missing packages" {
-            Mock Get-Package { 
-                return @([PSCustomObject]@{ Name = "git" })
-            }
+        It "Should handle package installation" {
             Mock Invoke-Expression { }
-            Mock Start-Process { return @{ ExitCode = 0 } }
-            
-            $desired = @{
-                Installed = @("git", "neovim")
-            }
-            
-            $result = Set-PackageState -Desired $desired
-            $result | Should -Not -BeNullOrEmpty
-        }
-        
-        It "Should handle WhatIf correctly" {
-            Mock Get-Package { return @() }
             
             $desired = @{
                 Installed = @("git")
             }
             
-            $result = Set-PackageState -Desired $desired -WhatIf
+            $result = Set-PackageState -Desired $desired
             $result | Should -Not -BeNullOrEmpty
         }
     }

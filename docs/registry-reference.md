@@ -218,7 +218,7 @@ The Registry provider implements the declarative provider contract:
 
 | Function | Purpose |
 |----------|---------|
-| `Get-ProviderInfo` | Returns provider metadata |
+| `Get-ProviderMetadata` | Returns provider metadata |
 | `Test-RegistryState` | Checks if current state matches desired state |
 | `Set-RegistryState` | Applies desired state changes |
 

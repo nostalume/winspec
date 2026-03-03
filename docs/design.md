@@ -221,7 +221,7 @@ function Invoke-WinSpec {
 | `Import-Spec` | Load and parse a specification file |
 | `Resolve-Spec` | Resolve imports and merge configurations |
 | `Merge-Hashtables` | Recursively merge nested hashtables |
-| `Test-Spec` | Validate specification against schema |
+| `Test-SpecSchema` | Validate specification against schema |
 | `Import-Manager` | Load a declarative provider module |
 | `Invoke-DeclarativeProviders` | Execute all declarative providers |
 | `Invoke-Triggers` | Execute trigger providers |
@@ -382,18 +382,18 @@ Invoke-Pester winspec/tests
 
 1. Create `managers/{name}.psm1`
 2. Implement functions:
-   - `Get-ProviderInfo`
-   - `Test-{Name}State`
-   - `Set-{Name}State`
-3. Add to schema validation in `schema.psm1`
+   - `Get-ProviderMetadata` - Returns `@{ Name = "..."; Type = "Declarative" }`
+   - `Test-{Name}State` - Returns `$true` if in desired state
+   - `Set-{Name}State` - Applies desired state
+3. No additional registration needed - discovered automatically
 
 ### Adding a Trigger Provider
 
 1. Create `triggers/{name}.psm1`
 2. Implement functions:
-   - `Get-ProviderInfo`
-   - `Invoke-{Name}Trigger`
-3. Add to `Get-ProviderInfo` in `schema.psm1`
+   - `Get-ProviderMetadata` - Returns `@{ Name = "..."; Type = "Trigger" }`
+   - `Invoke-{Name}Trigger` - Executes the trigger action
+3. No additional registration needed - discovered automatically
 
 ---
 
@@ -410,7 +410,7 @@ Invoke-Pester winspec/tests
 │                      Core Engine                             │
 │                     (core.psm1)                              │
 ├─────────────────────────────────────────────────────────────┤
-│  Import-Spec  →  Resolve-Spec  →  Test-Spec  →  Execute     │
+│  Import-Spec  →  Resolve-Spec  →  Test-SpecSchema  →  Execute  │
 │      │                │              │            │          │
 │      ▼                ▼              ▼            ▼          │
 │  Parse .ps1      Merge imports   Validate    Run providers   │
