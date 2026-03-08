@@ -27,6 +27,19 @@ Managing Windows configuration has traditionally been fragmented across multiple
 
 **WinSpec** (Windows Specification) is a unified, composable architecture for managing Windows system configuration. Configuration is expressed in native PowerShell data structures, enabling full PowerShell ecosystem integration.
 
+### WinSpec in Daily Use
+
+WinSpec simplifies your Windows workflow with these common scenarios:
+
+| Daily Task | WinSpec Solution |
+|------------|------------------|
+| **Set up a new PC** | Capture your configured system with `init`, apply to new machines |
+| **Keep config in sync** | Use `sync` to bidirectionally sync system state with your config file |
+| **Apply your setup** | Run `apply` to apply your declarative config (safe, idempotent) |
+| **Check differences** | Use `diff` to see what's changed between system and your config |
+| **Backup before changes** | Use `-Checkpoint` to create restore points before applying |
+| **Rollback if needed** | Use `rollback` to restore to a previous checkpoint |
+
 ### Design Principles
 
 | Principle | Description |
@@ -103,27 +116,22 @@ scoop update winspec
 
 ### Quick Start
 
-Create a configuration file (e.g., `myconfig.ps1`):
+**Step 1: Initialize your configuration**
+
+Capture your current system setup (or start fresh):
 
 ```powershell
-@{
-    Name = "myconfig"
-    Description = "My Windows configuration"
-    
-    Registry = @{
-        Explorer = @{
-            ShowHidden = $true
-            ShowFileExt = $true
-        }
-    }
-    
-    Package = @{
-        Installed = @("git", "neovim")
-    }
-}
+# Initialize from current system state (saves to ~/.config/winspec/.winspec.ps1)
+.\winspec\winspec.ps1 init
+
+# Or initialize with template and comments
+.\winspec\winspec.ps1 init -Template -Output my-config.ps1
+
+# Interactive mode - choose what to include
+.\winspec\winspec.ps1 init -Interactive
 ```
 
-Apply the configuration:
+**Step 2: Apply your configuration**
 
 ```powershell
 # Apply a specification (declarative only, safe)
@@ -139,16 +147,35 @@ Apply the configuration:
 .\winspec\winspec.ps1 status
 ```
 
+**Step 3: Daily maintenance**
+
+```powershell
+# See what's different between system and your config
+.\winspec\winspec.ps1 diff -Spec .\myconfig.ps1
+
+# Interactive sync - update config from system or vice versa
+.\winspec\winspec.ps1 sync -Spec .\myconfig.ps1 -SyncInteractive
+
+# If something goes wrong, rollback
+.\winspec\winspec.ps1 rollback -Last
+```
+
 ### CLI Commands
 
-| Command | Description |
+ | Command | Description |
 |---------|-------------|
 | `apply` | Apply a specification file |
+| `init` | Initialize a new configuration from system state |
 | `trigger` | Execute a specific trigger |
 | `status` | Show current system state |
 | `rollback` | Rollback to a checkpoint |
 | `providers` | List available providers |
 | `validate` | Validate a spec without applying |
+| `export` | Export current system state to a config file |
+| `diff` | Compare system state with a spec |
+| `merge` | Merge two specification files |
+| `sync` | Interactive sync between system and config |
+| `sandbox` | Test changes in a sandbox environment |
 | `help` | Show help message |
 
 ### CLI Options
@@ -222,58 +249,52 @@ Apply the configuration:
 
 ### Examples
 
-```powershell
-# Apply with triggers (includes non-idempotent actions)
-.\winspec\winspec.ps1 apply -Spec .\myconfig.ps1 -WithTriggers
+**Daily Workflows:**
 
-# Apply with checkpoint (create restore point first)
+```powershell
+# === New Machine Setup ===
+# 1. On your configured machine: export current state
+.\winspec\winspec.ps1 export -Output my-setup.ps1
+
+# 2. On new machine: apply the configuration
+.\winspec\winspec.ps1 apply -Spec .\my-setup.ps1
+
+# === Regular Maintenance ===
+# Check if system matches your config
+.\winspec\winspec.ps1 diff -Spec .\myconfig.ps1
+
+# Sync changes (interactive - choose what to keep)
+.\winspec\winspec.ps1 sync -Spec .\myconfig.ps1 -SyncInteractive
+
+# Export current system state (capture new changes)
+.\winspec\winspec.ps1 export -Output my-updated-config.ps1
+
+# === Applying Changes ===
+# Apply with checkpoint (safe - creates restore point first)
 .\winspec\winspec.ps1 apply -Spec .\myconfig.ps1 -Checkpoint
 
-# Run specific trigger(s)
-.\winspec\winspec.ps1 trigger -Name activation
-.\winspec\winspec.ps1 trigger -Name debloat -Option "silent"
-.\winspec\winspec.ps1 trigger -Name @("activation", "debloat")
+# Dry run - see what would change
+.\winspec\winspec.ps1 apply -Spec .\myconfig.ps1 -DryRun
 
-# Run all available triggers
-.\winspec\winspec.ps1 trigger
-
-# Rollback to last checkpoint
+# If something goes wrong
 .\winspec\winspec.ps1 rollback -Last
+
+# === Other Commands ===
+# Initialize a new configuration from current system state
+.\winspec\winspec.ps1 init
+
+# Run specific trigger(s)
+.\winspec\winspec.ps1 trigger "activation"
+.\winspec\winspec.ps1 trigger @{ debloat = "silent" }
+
+# Merge two config files
+.\winspec\winspec.ps1 merge -Base base.ps1 -Incoming custom.ps1 -Output merged.ps1
 
 # Validate a spec without applying
 .\winspec\winspec.ps1 validate -Spec .\myconfig.ps1
 
 # List available providers
 .\winspec\winspec.ps1 providers
-```
-
----
-
-## Project Structure
-
-```
-winspec/
-├── winspec.ps1           # CLI entry point
-├── core.psm1             # Engine: resolve, plan, execute
-├── checkpoint.psm1       # Restore point management
-├── logging.psm1          # Unified logging
-├── schema.psm1           # Type definitions and validation
-├── registry-maps.ps1     # Registry configuration maps
-│
-├── managers/             # Declarative providers (idempotent)
-│   ├── registry.psm1     # Registry operations
-│   ├── service.psm1      # Windows services
-│   ├── feature.psm1      # Windows features
-│   └── package.psm1      # Package management (Scoop)
-│
-├── triggers/             # Trigger providers (non-idempotent)
-│   ├── activation.psm1   # Windows/Office activation
-│   ├── debloat.psm1      # System debloating
-│   └── office.psm1       # Office deployment
-│
-└── tests/                # Test suite
-    ├── *.Tests.ps1       # Pester test files
-    └── run-tests.ps1     # Test runner
 ```
 
 ---
@@ -296,88 +317,15 @@ See [LICENSE-MIT](LICENSE-MIT) for details.
 
 ---
 
-## Contributing
-
-Contributions are welcome! Here's how to get started:
-
-### Development Setup
-
-1. Clone the repository
-2. Run tests to ensure everything works:
-   ```powershell
-   .\winspec\tests\run-tests.ps1
-   ```
-
-### Creating a New Declarative Provider
-
-1. Create a new file in `winspec/managers/` following the naming convention `{name}.psm1`
-2. Implement the required functions:
-
-```powershell
-# managers/myprovider.psm1
-Import-Module (Join-Path $PSScriptRoot "..\logging.psm1") -Force
-
-function Get-ProviderInfo {
-    return @{ 
-        Name = "MyProvider"
-        Type = "Declarative" 
-    }
-}
-
-function Test-MyProviderState {
-    param ([hashtable]$Desired)
-    # Returns $true if in desired state
-}
-
-function Set-MyProviderState {
-    param ([hashtable]$Desired, [switch]$WhatIf)
-    # Apply desired state
-}
-
-Export-ModuleMember Get-ProviderInfo, Test-MyProviderState, Set-MyProviderState
-```
-
-### Creating a New Trigger Provider
-
-1. Create a new file in `winspec/triggers/` following the naming convention `{name}.psm1`
-2. Implement the required functions:
-
-```powershell
-# triggers/mytrigger.psm1
-Import-Module (Join-Path $PSScriptRoot "..\logging.psm1") -Force
-
-function Get-ProviderInfo {
-    return @{ 
-        Name = "MyTrigger"
-        Type = "Trigger" 
-    }
-}
-
-function Invoke-MyTriggerTrigger {
-    param ($Option, [switch]$WhatIf)
-    # Execute trigger action
-}
-
-Export-ModuleMember Get-ProviderInfo, Invoke-MyTriggerTrigger
-```
-
-3. Add tests in `winspec/tests/`
-4. Update documentation in [`docs/providers.md`](docs/spec.md)
-
-### Guidelines
-
-- Follow existing code style and naming conventions
-- Use the logging module for consistent output
-- Support `-WhatIf` for preview functionality
-- Return consistent result hashtables with `Status` key
-- Handle errors gracefully with meaningful messages
-
----
-
 ## Documentation
 
 - **[docs/design.md](docs/design.md)** - Architecture and design principles
-- **[docs/providers.md](docs/spec.md)** - Provider development guide
+- **[docs/spec.md](docs/spec.md)** - Specification and provider development guide
+- **[docs/configuration.md](docs/configuration.md)** - Configuration guide
+- **[docs/contributing.md](docs/contributing.md)** - Contributing guide
+- **[docs/registry-reference.md](docs/registry-reference.md)** - Registry provider details
+- **[docs/service-reference.md](docs/service-reference.md)** - Service provider details
+- **[docs/feature-reference.md](docs/feature-reference.md)** - Feature provider details
 
 ---
 

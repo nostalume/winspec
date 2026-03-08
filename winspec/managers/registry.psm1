@@ -190,6 +190,228 @@ function Set-RegistryState {
     return $results
 }
 
+function Export-RegistryState {
+    <#
+    .SYNOPSIS
+        Exports the current registry state for bidirectional sync.
+    .DESCRIPTION
+        Captures current registry settings based on the registry maps.
+        Only exports values that are defined in the registry maps.
+    .OUTPUTS
+        Hashtable with registry categories and their values
+    #>
+    [CmdletBinding()]
+    param()
+    
+    $registryMaps = Get-RegistryMaps
+    $result = @{}
+    
+    foreach ($categoryName in $registryMaps.Keys) {
+        $category = $registryMaps[$categoryName]
+        $categoryResult = @{}
+        $hasValues = $false
+        
+        foreach ($propName in $category.Properties.Keys) {
+            $propDef = $category.Properties[$propName]
+            $value = Get-RegistryValue -Path $category.Path -Property $propDef.Name
+            
+            if ($null -ne $value) {
+                # Apply reverse map if exists (convert registry value to friendly value)
+                if ($propDef.Map) {
+                    $reverseMap = @{}
+                    foreach ($key in $propDef.Map.Keys) {
+                        $reverseMap[$propDef.Map[$key].ToString()] = $key
+                    }
+                    if ($reverseMap.ContainsKey($value.ToString())) {
+                        $value = $reverseMap[$value.ToString()]
+                    }
+                }
+                
+                $categoryResult[$propName] = $value
+                $hasValues = $true
+            }
+        }
+        
+        if ($hasValues) {
+            $result[$categoryName] = $categoryResult
+        }
+    }
+    
+    return $result
+}
+
+function Compare-RegistryState {
+    <#
+    .SYNOPSIS
+        Compares system registry state with desired configuration.
+    .DESCRIPTION
+        Compares current registry values with desired configuration and
+        returns differences (changed values).
+    .PARAMETER System
+        Current system state (from Export-RegistryState)
+    .PARAMETER Desired
+        Desired configuration state
+    .OUTPUTS
+        Array of difference objects with Type, Path, SystemValue, ConfigValue
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [hashtable]$System,
+        
+        [Parameter(Mandatory = $true)]
+        [hashtable]$Desired
+    )
+    
+    $differences = @()
+    
+    foreach ($categoryName in $Desired.Keys) {
+        $desiredCategory = $Desired[$categoryName]
+        $systemCategory = if ($System.ContainsKey($categoryName)) { $System[$categoryName] } else { @{} }
+        
+        foreach ($propName in $desiredCategory.Keys) {
+            $desiredValue = $desiredCategory[$propName]
+            $systemValue = if ($systemCategory.ContainsKey($propName)) { $systemCategory[$propName] } else { $null }
+            
+            $path = "Registry.$categoryName.$propName"
+            
+            if ($null -eq $systemValue) {
+                # Property not in system
+                $differences += @{
+                    Type = "Added"
+                    Path = $path
+                    SystemValue = $null
+                    ConfigValue = $desiredValue
+                }
+            }
+            elseif ($systemValue -ne $desiredValue) {
+                # Value changed
+                $differences += @{
+                    Type = "Changed"
+                    Path = $path
+                    SystemValue = $systemValue
+                    ConfigValue = $desiredValue
+                }
+            }
+            else {
+                # Values match
+                $differences += @{
+                    Type = "Equal"
+                    Path = $path
+                    SystemValue = $systemValue
+                    ConfigValue = $desiredValue
+                }
+            }
+        }
+    }
+    
+    return $differences
+}
+
+function Get-RegistryMockState {
+    <#
+    .SYNOPSIS
+        Gets the registry mock state from sandbox.
+    .DESCRIPTION
+        Returns the current registry state from the sandbox context.
+    .OUTPUTS
+        Hashtable with registry categories
+    #>
+    [CmdletBinding()]
+    param()
+    
+    Import-Module (Join-Path $PSScriptRoot "..\sandbox.psm1") -Force -ErrorAction SilentlyContinue
+    
+    if (Test-SandboxActive) {
+        return Get-SandboxState -Provider "Registry"
+    }
+    
+    # Not in sandbox - return empty default
+    return @{}
+}
+
+function Set-RegistryMockState {
+    <#
+    .SYNOPSIS
+        Sets the registry mock state in sandbox.
+    .DESCRIPTION
+        Updates the current registry state in the sandbox context.
+    .PARAMETER State
+        Hashtable with registry categories
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [hashtable]$State
+    )
+    
+    Import-Module (Join-Path $PSScriptRoot "..\sandbox.psm1") -Force -ErrorAction SilentlyContinue
+    
+    if (Test-SandboxActive) {
+        Set-SandboxState -Provider "Registry" -State $State
+    }
+}
+
+function Invoke-RegistrySandboxApply {
+    <#
+    .SYNOPSIS
+        Applies registry state changes in sandbox mode.
+    .DESCRIPTION
+        Simulates registry changes in the sandbox context.
+    .PARAMETER Desired
+        Desired registry state hashtable
+    .OUTPUTS
+        Hashtable with Status and Changed arrays
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [hashtable]$Desired
+    )
+    
+    Import-Module (Join-Path $PSScriptRoot "..\sandbox.psm1") -Force -ErrorAction SilentlyContinue
+    
+    if (-not (Test-SandboxActive)) {
+        throw "Not in sandbox mode"
+    }
+    
+    $currentState = Get-SandboxState -Provider "Registry"
+    
+    $results = @{
+        Status = "Success"
+        Changed = @()
+    }
+    
+    foreach ($category in $Desired.Keys) {
+        if (-not $currentState.ContainsKey($category)) {
+            $currentState[$category] = @{}
+        }
+        
+        foreach ($key in $Desired[$category].Keys) {
+            $oldValue = $currentState[$category][$key]
+            $newValue = $Desired[$category][$key]
+            
+            if ($oldValue -ne $newValue) {
+                $results.Changed += @{
+                    Category = $category
+                    Key = $key
+                    OldValue = $oldValue
+                    NewValue = $newValue
+                }
+                $currentState[$category][$key] = $newValue
+            }
+        }
+    }
+    
+    # Update sandbox state
+    Set-SandboxState -Provider "Registry" -State $currentState
+    
+    # Record change
+    Add-SandboxChange -Provider "Registry" -Change $results
+    
+    return $results
+}
+
 Export-ModuleMember -Function @(
     "Get-ProviderInfo"
     "Get-RegistryValue"
@@ -197,4 +419,9 @@ Export-ModuleMember -Function @(
     "Get-RegistryStateFromMap"
     "Test-RegistryState"
     "Set-RegistryState"
+    "Export-RegistryState"
+    "Compare-RegistryState"
+    "Get-RegistryMockState"
+    "Set-RegistryMockState"
+    "Invoke-RegistrySandboxApply"
 )

@@ -2,6 +2,22 @@
 
 Complete guide for writing and using WinSpec specifications.
 
+For detailed provider references, see:
+- [registry-reference.md](registry-reference.md) - Registry provider details
+- [service-reference.md](service-reference.md) - Service provider details  
+- [feature-reference.md](feature-reference.md) - Feature provider details
+
+---
+
+## Configuration Resolution
+
+WinSpec automatically finds your configuration files in this priority order:
+
+1. **Explicit** `-ConfigPath` argument
+2. **Environment** `$env:WINSPEC_CONFIG` variable
+3. **User config** `%USERPROFILE%\.config\winspec\`
+4. **Current directory** `.winspec.ps1` file
+
 ---
 
 ## Quick Start
@@ -40,67 +56,39 @@ Apply it:
 
 ---
 
-## Configuration Resolution
+## Import Path Resolution
 
-WinSpec automatically finds your configuration files in this priority order:
+The `Import` field supports path resolution in this priority order:
 
-1. **Explicit** `-ConfigPath` argument
-2. **Environment** `$env:WINSPEC_CONFIG` variable
-3. **User config** `%USERPROFILE%\.config\winspec\`
-4. **Current directory** `.winspec.ps1` file
+1. **Absolute path**: `C:\Configs\base.ps1`
+2. **Relative to current spec**: `.\base.ps1`
+3. **Relative to config directory**: `%USERPROFILE%\.config\winspec\base.ps1`
+4. **Built-in specs**: `base`, `minimal` (no extension needed)
 
-### User Configuration Directory
+```powershell
+# Absolute path
+Import = @("C:\MyConfigs\base.ps1")
 
-```
-%USERPROFILE%\.config\winspec\
-├── triggers\          # Custom trigger scripts
-│   ├── my-trigger.ps1
-│   └── custom-setup.ps1
-├── managers\          # Custom declarative providers
-│   └── my-provider.psm1
-└── ...                # Other config files
+# Relative to current file
+Import = @(".\base.ps1")
+Import = @("..\shared\defaults.ps1")
+
+# Using built-in spec names
+Import = @("base")
+
+# Multiple imports (later overrides earlier)
+Import = @(".\base.ps1", ".\custom.ps1")
 ```
 
 ---
 
 ## Declarative Providers
 
-Declarative providers are **idempotent** - running them multiple times produces the same result. They only make changes when needed.
+Declarative providers are **idempotent** - running them multiple times produces the same result.
 
 ### Registry Provider
 
-Configure Windows registry settings through predefined categories.
-
-**Available Categories:**
-
-| Category | Description |
-|----------|-------------|
-| `Clipboard` | Clipboard history settings |
-| `Explorer` | File Explorer behavior |
-| `Theme` | Windows light/dark theme |
-| `Desktop` | Desktop behavior settings |
-
-**Example:**
-```powershell
-Registry = @{
-    Clipboard = @{
-        EnableHistory = $true
-    }
-    Explorer = @{
-        ShowHidden = $true
-        ShowFileExt = $true
-    }
-    Theme = @{
-        AppTheme = "dark"
-        SystemTheme = "dark"
-    }
-    Desktop = @{
-        MenuShowDelay = "0"  # Instant menu display
-    }
-}
-```
-
-For all available registry settings, see [registry-reference.md](registry-reference.md).
+See [registry-reference.md](registry-reference.md) for all available categories and properties.
 
 ### Package Provider
 
@@ -116,40 +104,19 @@ Scoop is automatically installed if not present.
 
 ### Service Provider
 
-Manages Windows service states and startup types.
-
-```powershell
-Service = @{
-    wuauserv = @{ State = "stopped"; Startup = "disabled" }
-    WinDefend = @{ State = "running"; Startup = "automatic" }
-}
-```
-
-**Valid states:** `running`, `stopped`  
-**Valid startup types:** `automatic`, `manual`, `disabled`
+See [service-reference.md](service-reference.md) for how to find service names.
 
 ### Feature Provider
 
-Manages Windows optional features.
-
-```powershell
-Feature = @{
-    "Microsoft-Windows-Subsystem-Linux" = "enabled"
-    "VirtualMachinePlatform" = "enabled"
-}
-```
-
-**Valid values:** `enabled`, `disabled`
+See [feature-reference.md](feature-reference.md) for how to find feature names.
 
 ---
 
 ## Trigger Providers
 
-Triggers execute **one-time, non-idempotent actions**. They are explicitly separated from declarative providers to make it clear that running them multiple times may have different effects.
+Triggers execute **one-time, non-idempotent actions**.
 
 ### Configuration Format
-
-Triggers use an **array of hashtables**:
 
 ```powershell
 Trigger = @(
@@ -166,44 +133,66 @@ Trigger = @(
 
 ### Built-in Triggers
 
-| Trigger | Description | Example |
-|---------|-------------|---------|
-| **Activation** | Activate Windows/Office | `@{ Name = "Activation" }` |
-| **Debloat** | Remove bloatware | `@{ Name = "Debloat"; Value = "silent" }` |
-| **Office** | Download Office installer | `@{ Name = "Office"; Value = "C:\Installers" }` |
+| Trigger | Description |
+|---------|-------------|
+| `Activation` | Activate Windows/Office |
+| `Debloat` | Remove bloatware |
+| `Office` | Download Office installer |
 
-**Complete Trigger Example:**
-```powershell
-Trigger = @(
-    # Built-in triggers
-    @{ Name = "Activation" }
-    @{ Name = "Debloat"; Value = "silent" }
-    @{ Name = "Office"; Value = "C:\Installers"; Enabled = $false }
-    
-    # Custom triggers
-    @{ Name = "backup"; Path = ".\triggers\backup.ps1"; Value = "daily" }
-)
-```
+### Writing Custom Triggers
 
-### Custom Triggers
+#### Trigger Search Order
 
-Place PowerShell scripts in your configuration directory:
+When you specify `@{ Name = "my-trigger" }`, WinSpec searches in this order:
+
+1. **Explicit `Path`** if specified: `@{ Name = "my"; Path = ".\custom\trigger.ps1" }`
+2. **Built-in triggers**: `winspec/triggers/<Name>.psm1`
+3. **Config directory**: `%USERPROFILE%\.config\winspec\triggers\<Name>.ps1`
+4. **Spec directory**: Directory where your `.ps1` spec file is located, then `triggers\<Name>.ps1`
+
+> **Note:** `SpecDir` means the directory containing the specification file you're applying. For example, if you're applying `.\my-config.ps1`, the spec directory is the current directory.
+
+Create a PowerShell script that accepts parameters and returns a status hashtable:
 
 ```powershell
-# %USERPROFILE%\.config\winspec\triggers\my-custom.ps1
+# triggers/my-trigger.ps1
 param(
     [Parameter(Mandatory = $false)]
     $Value = $true,
     [switch]$WhatIf
 )
 
+# Dry-run mode
 if ($WhatIf) {
-    return @{ Status = "DryRun"; Message = "Would execute custom trigger" }
+    return @{ 
+        Status = "DryRun" 
+        Message = "Would execute my-trigger with value: $Value" 
+    }
 }
 
 # Your custom logic here
-return @{ Status = "Success"; Message = "Done" }
+try {
+    # Do something useful
+    Write-Host "Executing with value: $Value"
+    
+    return @{ 
+        Status = "Success" 
+        Message = "Completed successfully" 
+    }
+}
+catch {
+    return @{ 
+        Status = "Error" 
+        Message = $_.Exception.Message 
+    }
+}
 ```
+
+**Trigger Script Requirements:**
+- Accept `$Value` parameter (any type)
+- Support `-WhatIf` switch for dry-run
+- Return hashtable with `Status` key: `"Success"`, `"Error"`, `"DryRun"`, `"Skipped"`
+- Optionally include `Message` for details
 
 ---
 
@@ -221,7 +210,7 @@ Specifications can import other specifications. Later specs override earlier one
 }
 
 # custom.ps1
-@{
+@{ 
     Name = "custom"
     Import = @(".\base.ps1")
     
@@ -238,106 +227,7 @@ Specifications can import other specifications. Later specs override earlier one
 
 ## Commands
 
-### Apply Configuration
-
-```powershell
-# Apply declarative only
-.\winspec.ps1 apply -Spec .\my-config.ps1
-
-# Apply with triggers
-.\winspec.ps1 apply -Spec .\my-config.ps1 -WithTriggers
-
-# Preview changes (dry run)
-.\winspec.ps1 apply -Spec .\my-config.ps1 -DryRun
-
-# Apply with checkpoint
-.\winspec.ps1 apply -Spec .\my-config.ps1 -Checkpoint
-```
-
-### Run Triggers
-
-Run a single trigger:
-```powershell
-.\winspec.ps1 trigger -Name activation
-.\winspec.ps1 trigger -Name debloat -Option "silent"
-```
-
-Run multiple triggers:
-```powershell
-.\winspec.ps1 trigger -Name @("activation", "debloat")
-.\winspec.ps1 trigger -Name @("activation", "debloat") -Option "silent"
-```
-
-Run all available triggers:
-```powershell
-.\winspec.ps1 trigger
-```
-
-### Validate Without Applying
-
-```powershell
-.\winspec.ps1 validate -Spec .\my-config.ps1
-```
-
-### List Available Providers
-
-```powershell
-.\winspec.ps1 providers
-
-# With custom config directory
-.\winspec.ps1 providers -ConfigPath C:\MyConfig
-```
-
-### Check System Status
-
-```powershell
-.\winspec.ps1 status
-```
-
-### Rollback Changes
-
-```powershell
-.\winspec.ps1 rollback -Last
-.\winspec.ps1 rollback -SequenceNumber 100
-```
-
----
-
-## Complete Example
-
-```powershell
-# developer.ps1
-@{
-    Name = "developer"
-    Description = "Developer workstation configuration"
-    
-    Import = @(".\base.ps1")
-    
-    Registry = @{
-        Clipboard = @{ EnableHistory = $true }
-        Explorer = @{ ShowHidden = $true; ShowFileExt = $true }
-        Theme = @{ AppTheme = "dark"; SystemTheme = "dark" }
-        Desktop = @{ MenuShowDelay = "0" }
-    }
-    
-    Package = @{
-        Installed = @("git", "neovim", "nodejs", "python", "7zip", "vscode")
-    }
-    
-    Service = @{
-        wuauserv = @{ State = "stopped"; Startup = "disabled" }
-    }
-    
-    Feature = @{
-        "Microsoft-Windows-Subsystem-Linux" = "enabled"
-        "VirtualMachinePlatform" = "enabled"
-    }
-    
-    Trigger = @(
-        @{ Name = "Debloat"; Value = "silent" }
-    )
-}
-```
+See [spec.md](spec.md) for complete CLI command reference.
 
 ---
 

@@ -167,14 +167,34 @@ Engine: Execute action → Report result
 .\winspec.ps1 apply -Spec .\config.ps1 -WithTriggers
 
 # Apply specific trigger
-.\winspec.ps1 trigger -Name activation
-.\winspec.ps1 trigger -Name debloat -Option "silent"
+.\winspec.ps1 trigger "activation"
+.\winspec.ps1 trigger @{ debloat = "silent" }
 
 # Dry run (preview changes)
 .\winspec.ps1 apply -Spec .\config.ps1 -DryRun
 
 # Apply with checkpoint
 .\winspec.ps1 apply -Spec .\config.ps1 -Checkpoint
+
+# Initialize configuration from current system state
+.\winspec.ps1 init
+.\winspec.ps1 init -Output .\config.ps1 -Template
+
+# Export current system state
+.\winspec.ps1 export -Output .\config.ps1
+.\winspec.ps1 export -Output .\config.json -Format json
+
+# Compare system state with spec
+.\winspec.ps1 diff -Spec .\config.ps1
+
+# Merge two specifications
+.\winspec.ps1 merge -Base base.ps1 -Incoming custom.ps1 -Output merged.ps1
+
+# Interactive sync between system and config
+.\winspec.ps1 sync -Spec .\config.ps1 -SyncInteractive
+
+# Sandbox testing
+.\winspec.ps1 apply -Spec .\config.ps1 -Sandbox
 
 # Show current system state
 .\winspec.ps1 status

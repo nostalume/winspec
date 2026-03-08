@@ -1,15 +1,14 @@
 {
-    "version": "v0.1.0",
+    "version": "0.1.0",
     "description": "A composable, declarative Windows configuration system",
     "homepage": "https://github.com/lvyuemeng/winspec",
     "license": "MIT",
     "url": "https://github.com/lvyuemeng/winspec/archive/refs/tags/v0.1.0.zip",
-    "extract_dir": "winspec-v0.1.0",
+    "extract_dir": "winspec-0.1.0",
     "bin": "winspec/winspec.ps1",
-    "persist": "winspec/specs",
     "checkver": "github",
     "autoupdate": {
-        "url": "https://github.com/lvyuemeng/winspec/archive/refs/tags/$version.zip",
+        "url": "https://github.com/lvyuemeng/winspec/archive/refs/tags/v$version.zip",
         "extract_dir": "winspec-$version"
     }
 }

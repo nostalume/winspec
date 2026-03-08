@@ -5,6 +5,7 @@ $ModuleRoot = $PSScriptRoot
 Import-Module (Join-Path $ModuleRoot "logging.psm1") -Force
 Import-Module (Join-Path $ModuleRoot "schema.psm1") -Force
 Import-Module (Join-Path $ModuleRoot "checkpoint.psm1") -Force
+Import-Module (Join-Path $ModuleRoot "sandbox.psm1") -Force -ErrorAction SilentlyContinue
 
 function Import-Spec {
     <#
@@ -315,6 +316,10 @@ function Invoke-DeclarativeProviders {
     # Dynamically discover declarative providers from managers directory
     $managersPath = Join-Path $ModuleRoot "managers"
     $declarativeProviders = Get-DiscoveredProviders -Path $managersPath -Type "Declarative"
+    
+    # Check sandbox mode
+    $isSandbox = Test-SandboxActive
+    $sandboxMode = if ($isSandbox) { Get-SandboxMode } else { "Live" }
 
     foreach ($providerName in $declarativeProviders) {
         # Skip if provider not configured
@@ -335,6 +340,12 @@ function Invoke-DeclarativeProviders {
         # Get provider functions
         $testStateCmd = Get-Command "Test-$($providerName)State" -ErrorAction SilentlyContinue
         $setStateCmd = Get-Command "Set-$($providerName)State" -ErrorAction SilentlyContinue
+        
+        # Get sandbox functions if in sandbox mode
+        $sandboxApplyCmd = $null
+        if ($isSandbox -and $sandboxMode -eq "Mock") {
+            $sandboxApplyCmd = Get-Command "Invoke-$($providerName)SandboxApply" -ErrorAction SilentlyContinue
+        }
 
         if ($null -eq $testStateCmd -or $null -eq $setStateCmd) {
             Write-Log -Level "ERROR" -Message "Provider $providerName is missing required functions"
@@ -357,17 +368,25 @@ function Invoke-DeclarativeProviders {
             continue
         }
 
-        # Handle WhatIf scenario
-        if ($WhatIf) {
+        # Handle WhatIf or DryRun scenario
+        if ($WhatIf -or $sandboxMode -eq "DryRun") {
             Write-Log -Level "INFO" -Message "Would apply $providerName changes (dry run)"
             $results[$providerName] = @{ Status = "DryRun"; Changes = "Pending" }
             continue
         }
 
-        # Apply configuration
+        # Apply configuration - use sandbox apply if in sandbox mode
         if ($PSCmdlet.ShouldProcess($providerName, "Apply configuration")) {
             try {
-                $results[$providerName] = & $setStateCmd -Desired $desired
+                if ($sandboxApplyCmd) {
+                    # Use sandbox apply in mock mode
+                    $results[$providerName] = & $sandboxApplyCmd -Desired $desired
+                    Write-Log -Level "INFO" -Message "[SANDBOX] Applied $providerName changes"
+                }
+                else {
+                    # Use real apply
+                    $results[$providerName] = & $setStateCmd -Desired $desired
+                }
             }
             catch {
                 Write-Log -Level "ERROR" -Message "Provider $providerName set failed: $_"
@@ -789,10 +808,24 @@ function Invoke-WinSpec {
         [switch]$Checkpoint,
         
         [Parameter(Mandatory = $false)]
-        [switch]$WithTriggers
+        [switch]$WithTriggers,
+        
+        [Parameter(Mandatory = $false)]
+        [switch]$SandboxMode,
+        
+        [Parameter(Mandatory = $false)]
+        [string]$SandboxProfile = "default"
     )
     
     Write-LogHeader -Title "WinSpec Execution"
+    
+    # Check sandbox mode
+    $isSandbox = Test-SandboxActive
+    $effectiveMode = if ($isSandbox) { Get-SandboxMode } else { "Live" }
+    
+    if ($isSandbox) {
+        Write-Log -Level "INFO" -Message "Running in SANDBOX mode ($effectiveMode)"
+    }
     
     # 1. Parse specification
     $config = Import-Spec -Path $Spec

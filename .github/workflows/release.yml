@@ -20,9 +20,11 @@ jobs:
       - name: Get version from tag
         id: get_version
         run: |
-          # Keep 'v' prefix in version
+          # Remove 'v' prefix from version for scoop manifest
           VERSION=${GITHUB_REF#refs/tags/}
+          VERSION_WITHOUT_V=${VERSION#v}
           echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "VERSION_WITHOUT_V=$VERSION_WITHOUT_V" >> $GITHUB_OUTPUT
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -35,11 +37,11 @@ jobs:
 
       - name: Update Scoop manifest
         run: |
-          VERSION=${{ steps.get_version.outputs.VERSION }}
+          VERSION=${{ steps.get_version.outputs.VERSION_WITHOUT_V }}
           
           # Update winspec.json using jq
           jq --arg version "$VERSION" \
-             --arg url "https://github.com/lvyuemeng/winspec/archive/refs/tags/$VERSION.zip" \
+             --arg url "https://github.com/lvyuemeng/winspec/archive/refs/tags/v$VERSION.zip" \
              --arg extract_dir "winspec-$VERSION" \
              '.version = $version | .url = $url | .extract_dir = $extract_dir' \
              winspec.json > winspec.json.tmp && mv winspec.json.tmp winspec.json
@@ -53,5 +55,5 @@ jobs:
           
       - name: Push changes
         run: |
-          # Push to master branch with full refname
-          git push origin HEAD:refs/heads/master
+          # Push to main branch with full refname
+          git push origin HEAD:refs/heads/main

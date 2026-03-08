@@ -302,6 +302,137 @@ if ($args -match '^(?:-h|-\?|/\?|--help)$') {
 }
 ```
 
+## Called Function Paths
+
+This section documents the function call flow for WinSpec commands to clarify the execution path for agentic coding.
+
+### CLI Entry Point
+
+**File**: `winspec/winspec.ps1`
+
+The main CLI script dispatches commands to their respective handlers:
+
+```powershell
+# Command dispatch via switch statement
+switch ($Command) {
+    "apply"    { Invoke-WinSpec }
+    "export"   { Export-SystemState }
+    "diff"     { Compare-SystemState }
+    "merge"    { Merge-Configuration }
+    "sync"     { Invoke-Sync }
+    ...
+}
+```
+
+### Export Command Flow
+
+**CLI**: `.\winspec.ps1 export -Output <path>`
+
+**Call Path**:
+```
+winspec.ps1
+  └─ Export-SystemState (winspec/export.psm1)
+       ├─ Import-Module managers/package.psm1
+       │   └─ Export-PackageState
+       ├─ Import-Module managers/registry.psm1
+       │   └─ Export-RegistryState
+       ├─ Import-Module managers/service.psm1
+       │   └─ Export-ServiceState
+       └─ Import-Module managers/feature.psm1
+           └─ Export-FeatureState
+```
+
+### Diff Command Flow
+
+**CLI**: `.\winspec.ps1 diff -Spec <spec.ps1> [-Against <state.ps1>]`
+
+**Call Path**:
+```
+winspec.ps1
+  └─ Compare-SystemState (winspec/diff.psm1)
+       ├─ Export-SystemState (if Against not specified)
+       ├─ Import-Module managers/package.psm1
+       │   └─ Compare-PackageState
+       ├─ Import-Module managers/registry.psm1
+       │   └─ Compare-RegistryState
+       ├─ Import-Module managers/service.psm1
+       │   └─ Compare-ServiceState
+       └─ Import-Module managers/feature.psm1
+           └─ Compare-FeatureState
+```
+
+### Merge Command Flow
+
+**CLI**: `.\winspec.ps1 merge -Base <base.ps1> -Incoming <incoming.ps1> -Output <out.ps1> -Strategy <strategy>`
+
+**Call Path**:
+```
+winspec.ps1
+  └─ Merge-Configuration (winspec/merge.psm1)
+       ├─ Import-MergeSpec
+       ├─ Invoke-MergeEngine
+       │   ├─ Resolve-MergeItem (per key)
+       │   │   ├─ Test-ValuesEqual
+       │   │   ├─ Resolve-ByStrategy
+       │   │   └─ Invoke-ConflictResolution (if interactive)
+       │   └─ Merge-ValuesUnion
+       └─ Export-MergedConfig
+```
+
+**Strategies**: `auto`, `union`, `ours`, `theirs`
+
+### Sync Command Flow
+
+**CLI**: `.\winspec.ps1 sync -Spec <spec.ps1> -SyncInteractive`
+
+**Call Path**:
+```
+winspec.ps1
+  └─ Invoke-Sync (winspec/sync.psm1)
+       ├─ Export-SystemState (winspec/export.psm1)
+       ├─ Compare-ForSync
+       │   └─ Compare-*State (provider compare functions)
+       ├─ Invoke-SyncPrompt (per difference, if interactive)
+       │   ├─ Format-SyncValue
+       │   └─ Resolve-SyncAuto
+       ├─ Apply-SyncChanges
+       │   └─ Set-*State (provider set functions)
+       └─ Save-SyncConfig
+```
+
+**Sync Strategies**:
+- `export`: System state wins, update config
+- `import`: Config wins, update system
+- `mirror`: Add missing from both sides (default)
+
+### Provider Function Contract
+
+Each declarative provider in `winspec/managers/` implements:
+
+| Function | Purpose | Called By |
+|----------|---------|-----------|
+| `Export-{Name}State` | Export current system state | Export-SystemState |
+| `Compare-{Name}State` | Compare system vs desired | Compare-SystemState, Compare-ForSync |
+| `Test-{Name}State` | Test if changes needed | Invoke-WinSpec |
+| `Set-{Name}State` | Apply changes | Invoke-WinSpec, Apply-SyncChanges |
+
+### Apply Command Flow
+
+**CLI**: `.\winspec.ps1 apply -Spec <spec.ps1>`
+
+**Call Path**:
+```
+winspec.ps1
+  └─ Invoke-WinSpec (winspec/core.psm1)
+       ├─ Import-Spec
+       ├─ Resolve-Spec
+       │   └─ Merge-Hashtables
+       ├─ Test-SpecSchema
+       └─ Invoke-Plan (per provider)
+            ├─ Test-{Name}State
+            └─ Set-{Name}State
+```
+
 ## Notes for Agents
 
 - Always inspect code before executing, as noted in README.md

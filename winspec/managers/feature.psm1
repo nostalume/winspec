@@ -111,9 +111,226 @@ function Set-FeatureState {
     return $results
 }
 
+function Export-FeatureState {
+    <#
+    .SYNOPSIS
+        Exports the current Windows features state for bidirectional sync.
+    .DESCRIPTION
+        Captures currently enabled Windows optional features.
+        Exports features that are Enabled or Disabled (not Removed).
+    .PARAMETER FeatureNames
+        Optional array of specific feature names to export.
+    .OUTPUTS
+        Hashtable with feature names and their states
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $false)]
+        [string[]]$FeatureNames = @()
+    )
+    
+    $result = @{}
+    
+    try {
+        if ($FeatureNames.Count -eq 0) {
+            # Get all enabled features
+            $features = Get-WindowsOptionalFeature -Online | Where-Object { 
+                $_.State -eq 'Enabled' 
+            } | Select-Object -ExpandProperty FeatureName
+            $FeatureNames = $features
+        }
+        
+        foreach ($featureName in $FeatureNames) {
+            $state = Get-FeatureState -FeatureName $featureName
+            if ($state) {
+                # Convert to lowercase for consistency
+                $result[$featureName] = $state.ToString().ToLower()
+            }
+        }
+    }
+    catch {
+        Write-Log -Level "ERROR" -Message "Failed to export feature state: $($_.Exception.Message)"
+    }
+    
+    return $result
+}
+
+function Compare-FeatureState {
+    <#
+    .SYNOPSIS
+        Compares system feature state with desired configuration.
+    .DESCRIPTION
+        Compares current Windows features state with desired and
+        returns differences (added, removed, changed features).
+    .PARAMETER System
+        Current system state (from Export-FeatureState)
+    .PARAMETER Desired
+        Desired configuration state
+    .OUTPUTS
+        Array of difference objects with Type, Path, SystemValue, ConfigValue
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [hashtable]$System,
+        
+        [Parameter(Mandatory = $true)]
+        [hashtable]$Desired
+    )
+    
+    $differences = @()
+    
+    foreach ($featureName in $Desired.Keys) {
+        $desiredState = $Desired[$featureName]
+        $systemState = if ($System.ContainsKey($featureName)) { $System[$featureName] } else { $null }
+        
+        $path = "Feature.$featureName"
+        
+        if ($null -eq $systemState) {
+            # Feature not in system
+            $differences += @{
+                Type = "Added"
+                Path = $path
+                SystemValue = $null
+                ConfigValue = $desiredState
+            }
+        }
+        elseif ($systemState -ne $desiredState) {
+            # State changed
+            $differences += @{
+                Type = "Changed"
+                Path = $path
+                SystemValue = $systemState
+                ConfigValue = $desiredState
+            }
+        }
+        else {
+            # State matches
+            $differences += @{
+                Type = "Equal"
+                Path = $path
+                SystemValue = $systemState
+                ConfigValue = $desiredState
+            }
+        }
+    }
+    
+    # Check for removed features (in system but not in desired)
+    foreach ($featureName in $System.Keys) {
+        if (-not $Desired.ContainsKey($featureName)) {
+            $differences += @{
+                Type = "Removed"
+                Path = "Feature.$featureName"
+                SystemValue = $System[$featureName]
+                ConfigValue = $null
+            }
+        }
+    }
+    
+    return $differences
+}
+
+function Get-FeatureMockState {
+    <#
+    .SYNOPSIS
+        Gets the feature mock state from sandbox.
+    .DESCRIPTION
+        Returns the current feature state from the sandbox context.
+    .OUTPUTS
+        Hashtable with feature names and states
+    #>
+    [CmdletBinding()]
+    param()
+    
+    Import-Module (Join-Path $PSScriptRoot "..\sandbox.psm1") -Force -ErrorAction SilentlyContinue
+    
+    if (Test-SandboxActive) {
+        return Get-SandboxState -Provider "Feature"
+    }
+    
+    return @{}
+}
+
+function Set-FeatureMockState {
+    <#
+    .SYNOPSIS
+        Sets the feature mock state in sandbox.
+    .DESCRIPTION
+        Updates the current feature state in the sandbox context.
+    .PARAMETER State
+        Hashtable with feature names and states
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [hashtable]$State
+    )
+    
+    Import-Module (Join-Path $PSScriptRoot "..\sandbox.psm1") -Force -ErrorAction SilentlyContinue
+    
+    if (Test-SandboxActive) {
+        Set-SandboxState -Provider "Feature" -State $State
+    }
+}
+
+function Invoke-FeatureSandboxApply {
+    <#
+    .SYNOPSIS
+        Applies feature state changes in sandbox mode.
+    .DESCRIPTION
+        Simulates feature changes in the sandbox context.
+    .PARAMETER Desired
+        Desired feature state hashtable
+    .OUTPUTS
+        Hashtable with Status and Changed arrays
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [hashtable]$Desired
+    )
+    
+    Import-Module (Join-Path $PSScriptRoot "..\sandbox.psm1") -Force -ErrorAction SilentlyContinue
+    
+    if (-not (Test-SandboxActive)) {
+        throw "Not in sandbox mode"
+    }
+    
+    $currentState = Get-SandboxState -Provider "Feature"
+    
+    $results = @{
+        Status = "Success"
+        Changed = @()
+    }
+    
+    foreach ($feature in $Desired.Keys) {
+        $currentValue = $currentState[$feature]
+        $desiredValue = $Desired[$feature]
+        
+        if ($currentValue -ne $desiredValue) {
+            $results.Changed += @{
+                Name = $feature
+                OldValue = $currentValue
+                NewValue = $desiredValue
+            }
+            $currentState[$feature] = $desiredValue
+        }
+    }
+    
+    Set-SandboxState -Provider "Feature" -State $currentState
+    Add-SandboxChange -Provider "Feature" -Change $results
+    
+    return $results
+}
+
 Export-ModuleMember -Function @(
     "Get-ProviderInfo"
     "Get-FeatureState"
     "Test-FeatureState"
     "Set-FeatureState"
+    "Export-FeatureState"
+    "Compare-FeatureState"
+    "Get-FeatureMockState"
+    "Set-FeatureMockState"
+    "Invoke-FeatureSandboxApply"
 )

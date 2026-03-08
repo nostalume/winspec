@@ -2,6 +2,8 @@
 
 Complete guide for using built-in providers, writing specifications, and developing custom providers.
 
+For configuration details, see [configuration.md](configuration.md).
+
 ---
 
 ## Provider Types
@@ -55,20 +57,18 @@ A specification is a PowerShell `.ps1` file returning a hashtable:
 
 Manages Windows registry settings with predefined categories.
 
-| Category | Properties | Description |
-|----------|------------|-------------|
-| `Clipboard` | `EnableHistory` | Clipboard history |
-| `Explorer` | `ShowHidden`, `ShowFileExt` | File Explorer |
-| `Theme` | `AppTheme`, `SystemTheme` | Windows theme |
-| `Desktop` | `MenuShowDelay` | Desktop behavior |
-
-See [registry-reference.md](registry-reference.md) for complete reference.
-
----
+See [registry-reference.md](registry-reference.md) for all available registry settings.
 
 ### Package Provider
 
 Ensures packages are installed via Scoop.
+
+**Prerequisite:** Scoop must be installed manually before using this provider.
+
+```powershell
+# Install Scoop (run in PowerShell)
+irm get.scoop.sh | iex
+```
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -80,18 +80,13 @@ Package = @{
 }
 ```
 
-Auto-installs Scoop if not present.
-
----
+Uses `scoop export` to efficiently determine current package state.
 
 ### Service Provider
 
 Manages Windows services.
 
-| Field | Type | Values |
-|-------|------|--------|
-| `State` | string | `"running"`, `"stopped"` |
-| `Startup` | string | `"automatic"`, `"manual"`, `"disabled"` |
+See [service-reference.md](service-reference.md) for how to find proper service names and available values.
 
 ```powershell
 Service = @{
@@ -100,16 +95,11 @@ Service = @{
 }
 ```
 
----
-
 ### Feature Provider
 
 Manages Windows optional features.
 
-| Value | Description |
-|-------|-------------|
-| `"enabled"` | Enable feature |
-| `"disabled"` | Disable feature |
+See [feature-reference.md](feature-reference.md) for how to find proper feature names and available values.
 
 ```powershell
 Feature = @{
@@ -146,37 +136,15 @@ Trigger = @(
 | `Debloat` | `$true`, `"silent"` | Remove bloatware |
 | `Office` | `"C:\Path"` | Download Office installer |
 
-```powershell
-Trigger = @(
-    @{ Name = "Activation" }
-    @{ Name = "Debloat"; Value = "silent" }
-    @{ Name = "Office"; Value = "C:\Installers" }
-)
-```
-
 ### Custom Triggers
+
+See [configuration.md](configuration.md) for detailed guide on writing custom triggers.
 
 **Search Order:**
 1. Explicit `Path` if specified
 2. Built-in: `winspec/triggers/<Name>.psm1`
-3. Spec directory: `<SpecDir>/triggers/<Name>.ps1`
-4. Config directory: `<ConfigDir>/triggers/<Name>.ps1`
-
-**Script Format:**
-```powershell
-param($Value = $true, [switch]$WhatIf)
-if ($WhatIf) { return @{ Status = "DryRun" } }
-# Custom logic
-return @{ Status = "Success"; Message = "Done" }
-```
-
-**Disable Triggers:**
-```powershell
-Trigger = @(
-    @{ Name = "Activation"; Enabled = $false }
-)
-# Or: Trigger = @()  # Disable all
-```
+3. Spec directory: Directory where your `.ps1` spec file is located
+4. Config directory: `%USERPROFILE%\.config\winspec\triggers\<Name>.ps1`
 
 ---
 
@@ -305,28 +273,23 @@ Custom path: `@{ Name = "trigger"; Path = ".\triggers\custom.ps1" }`
 3. `%USERPROFILE%\.config\winspec\`
 4. `.winspec.ps1` in current directory
 
-```powershell
-# Explicit path
-.\winspec\winspec.ps1 apply -Spec .\spec.ps1 -ConfigPath C:\WinSpec\Config
+### CLI Commands
 
-# Environment variable
-$env:WINSPEC_CONFIG = "C:\WinSpec\Config"
-```
-
-### Composition
-
-Specs can import others. Later specs override earlier ones for conflicting keys.
-
-```powershell
-# base.ps1
-@{ Registry = @{ Theme = @{ AppTheme = "light" } } }
-
-# custom.ps1
-@{ 
-    Import = @(".\base.ps1")
-    Registry = @{ Theme = @{ AppTheme = "dark" } }  # Overrides base
-}
-```
+| Command | Description |
+|---------|-------------|
+| `apply` | Apply a specification file |
+| `init` | Initialize a new configuration from system state |
+| `trigger` | Execute a specific trigger |
+| `status` | Show current system state |
+| `rollback` | Rollback to a checkpoint |
+| `providers` | List available providers |
+| `validate` | Validate a spec without applying |
+| `export` | Export current system state to a config file |
+| `diff` | Compare system state with a spec |
+| `merge` | Merge two specification files |
+| `sync` | Interactive sync between system and config |
+| `sandbox` | Test changes in a sandbox environment |
+| `help` | Show help message |
 
 ---
 

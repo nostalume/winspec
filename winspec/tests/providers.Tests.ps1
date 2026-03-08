@@ -228,17 +228,6 @@ Describe "Package Provider" {
     BeforeAll {
         # Import only the package module for this test block
         Import-Module "$PSScriptRoot\..\managers\package.psm1" -Force
-        
-        # Mock package operations within the module scope
-        Mock Get-Command -ModuleName package { 
-            param($Name)
-            if ($Name -eq "scoop") {
-                return [PSCustomObject]@{ Name = "scoop" }
-            }
-            return $null
-        }
-        Mock Invoke-RestMethod -ModuleName package { return "mock script content" }
-        Mock Invoke-Expression -ModuleName package { }
     }
     
     Context "Get-ProviderInfo" {
@@ -249,29 +238,111 @@ Describe "Package Provider" {
         }
     }
     
-    Context "Get-PackageState" {
-        It "Should return installed packages" {
-            Mock Get-Package { 
-                return @(
-                    [PSCustomObject]@{ Name = "git" },
-                    [PSCustomObject]@{ Name = "neovim" }
-                )
+    Context "Test-ScoopInstalled" {
+        It "Should return true when Scoop is installed" {
+            Mock Get-Command -ModuleName package { 
+                return [PSCustomObject]@{ Name = "scoop" }
             }
             
+            Test-ScoopInstalled | Should -Be $true
+        }
+        
+        It "Should throw error when Scoop is not installed" {
+            Mock Get-Command -ModuleName package { return $null }
+            
+            { Test-ScoopInstalled } | Should -Throw
+        }
+    }
+    
+    Context "Get-ScoopExport" {
+        It "Should parse scoop export JSON correctly" {
+            $mockJson = @'
+{
+    "buckets": [
+        {"name": "main", "source": "https://github.com/ScoopInstaller/Main"}
+    ],
+    "apps": [
+        {"name": "git", "version": "2.42.0", "bucket": "main", "architecture": "64bit"},
+        {"name": "neovim", "version": "0.9.0", "bucket": "main", "architecture": "64bit"}
+    ]
+}
+'@
+            Mock Get-Command -ModuleName package { return [PSCustomObject]@{ Name = "scoop" } }
+            Mock Invoke-ScoopCommand -ModuleName package { return $mockJson }
+            
+            $result = Get-ScoopExport
+            $result.apps | Should -HaveCount 2
+            $result.buckets | Should -HaveCount 1
+            $result.apps[0].name | Should -Be "git"
+        }
+        
+        It "Should handle empty export" {
+            Mock Get-Command -ModuleName package { return [PSCustomObject]@{ Name = "scoop" } }
+            Mock Invoke-ScoopCommand -ModuleName package { return "{}" }
+            
+            $result = Get-ScoopExport
+            $result.apps | Should -HaveCount 0
+            $result.buckets | Should -HaveCount 0
+        }
+    }
+    
+    Context "Get-InstalledPackages" {
+        It "Should return list of installed package names" {
+            $mockJson = @'
+{
+    "buckets": [],
+    "apps": [
+        {"name": "git", "version": "2.42.0"},
+        {"name": "neovim", "version": "0.9.0"}
+    ]
+}
+'@
+            Mock Get-Command -ModuleName package { return [PSCustomObject]@{ Name = "scoop" } }
+            Mock Invoke-ScoopCommand -ModuleName package { return $mockJson }
+            
             $result = Get-InstalledPackages
+            $result | Should -HaveCount 2
+            $result | Should -Contain "git"
+            $result | Should -Contain "neovim"
+        }
+    }
+    
+    Context "Get-PackageInfo" {
+        It "Should return package metadata" {
+            $mockJson = @'
+{
+    "buckets": [],
+    "apps": [
+        {"name": "git", "version": "2.42.0", "bucket": "main", "architecture": "64bit"}
+    ]
+}
+'@
+            Mock Get-Command -ModuleName package { return [PSCustomObject]@{ Name = "scoop" } }
+            Mock Invoke-ScoopCommand -ModuleName package { return $mockJson }
+            
+            $result = Get-PackageInfo -PackageName "git"
             $result | Should -Not -BeNullOrEmpty
+            $result.name | Should -Be "git"
+            $result.version | Should -Be "2.42.0"
         }
     }
     
     Context "Test-PackageState" {
+        BeforeEach {
+            $mockJson = @'
+{
+    "buckets": [],
+    "apps": [
+        {"name": "git", "version": "2.42.0"},
+        {"name": "neovim", "version": "0.9.0"}
+    ]
+}
+'@
+            Mock Get-Command -ModuleName package { return [PSCustomObject]@{ Name = "scoop" } }
+            Mock Invoke-ScoopCommand -ModuleName package { return $mockJson }
+        }
+        
         It "Should return true when all packages installed" {
-            Mock Get-Package { 
-                return @(
-                    [PSCustomObject]@{ Name = "git" },
-                    [PSCustomObject]@{ Name = "neovim" }
-                )
-            }
-            
             $desired = @{
                 Installed = @("git")
             }
@@ -280,13 +351,16 @@ Describe "Package Provider" {
             $result | Should -Be $true
         }
         
-        It "Should return false when package missing" {
-            Mock Get-Package { 
-                return @(
-                    [PSCustomObject]@{ Name = "git" }
-                )
+        It "Should return true when all packages installed (multiple)" {
+            $desired = @{
+                Installed = @("git", "neovim")
             }
             
+            $result = Test-PackageState -Desired $desired
+            $result | Should -Be $true
+        }
+        
+        It "Should return false when package missing" {
             $desired = @{
                 Installed = @("git", "missing-package")
             }
@@ -294,18 +368,60 @@ Describe "Package Provider" {
             $result = Test-PackageState -Desired $desired
             $result | Should -Be $false
         }
+        
+        It "Should return true when no packages specified" {
+            $desired = @{}
+            
+            $result = Test-PackageState -Desired $desired
+            $result | Should -Be $true
+        }
     }
     
     Context "Set-PackageState" {
-        It "Should handle package installation" {
-            Mock Invoke-Expression { }
+        BeforeEach {
+            $mockJson = @'
+{
+    "buckets": [],
+    "apps": [
+        {"name": "git", "version": "2.42.0"}
+    ]
+}
+'@
+            Mock Get-Command -ModuleName package { return [PSCustomObject]@{ Name = "scoop" } }
+            Mock Invoke-ScoopCommand -ModuleName package {
+                param($Command, $Arguments)
+                if ($Command -eq "export") { return $mockJson }
+                return $null
+            }
+        }
+        
+        It "Should skip already installed packages" {
+            $desired = @{
+                Installed = @("git")
+            }
+            
+            $result = Set-PackageState -Desired $desired
+            $result["git"].Status | Should -Be "AlreadyInstalled"
+        }
+        
+        It "Should mark packages for installation when not present" {
+            $desired = @{
+                Installed = @("new-package")
+            }
+            
+            $result = Set-PackageState -Desired $desired -WhatIf
+            $result["new-package"].Status | Should -Be "DryRun"
+        }
+        
+        It "Should return error when Scoop is not installed" {
+            Mock Get-Command -ModuleName package { return $null }
             
             $desired = @{
                 Installed = @("git")
             }
             
             $result = Set-PackageState -Desired $desired
-            $result | Should -Not -BeNullOrEmpty
+            $result["Scoop"].Status | Should -Be "Error"
         }
     }
 }
