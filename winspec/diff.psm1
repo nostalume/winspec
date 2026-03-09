@@ -3,6 +3,7 @@
 # Import dependent modules
 Import-Module (Join-Path $PSScriptRoot "logging.psm1") -Force
 Import-Module (Join-Path $PSScriptRoot "export.psm1") -Force
+Import-Module (Join-Path $PSScriptRoot "utils.psm1") -Force
 
 function Compare-SystemState {
     <#
@@ -109,6 +110,7 @@ function Compare-SystemState {
                             "Removed" { $allDifferences.Removed += $diff }
                             "Changed" { $allDifferences.Changed += $diff }
                             "Equal" { $allDifferences.Equal += $diff }
+                            # Handle case where Equal entries might not be returned (optimization)
                         }
                     }
                     
@@ -193,13 +195,13 @@ function Format-DiffOutput {
         $output += "`n[~] CHANGED (different values):"
         foreach ($item in $Differences.Changed) {
             $output += "    $($item.Path)"
-            $output += "       System:  $(ConvertTo-DiffValue $item.SystemValue)"
-            $output += "       Config:  $(ConvertTo-DiffValue $item.ConfigValue)"
+            $output += "       System:  $(ConvertTo-DisplayValue $item.SystemValue)"
+            $output += "       Config:  $(ConvertTo-DisplayValue $item.ConfigValue)"
         }
     }
     
-    # Equal items (only show count)
-    $equalCount = $Differences.Equal.Count
+    # Equal items (only show count) - handle case where Equal might not exist in custom hashtables
+    $equalCount = if ($Differences.Equal) { $Differences.Equal.Count } else { 0 }
     if ($equalCount -gt 0) {
         $output += "`n[=] EQUAL (matched): $equalCount items"
     }
@@ -211,31 +213,6 @@ function Format-DiffOutput {
     $output += "Total differences: $totalChanges"
     
     return $output -join "`n"
-}
-
-function ConvertTo-DiffValue {
-    <#
-    .SYNOPSIS
-        Helper to convert a value to diff display format.
-    #>
-    param($Value)
-    
-    if ($null -eq $Value) {
-        return "<null>"
-    }
-    elseif ($Value -is [hashtable]) {
-        $details = ($Value.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join ", "
-        return "{ $details }"
-    }
-    elseif ($Value -is [array]) {
-        return "@($($Value -join ', '))"
-    }
-    elseif ($Value -is [bool]) {
-        return $Value.ToString().ToLower()
-    }
-    else {
-        return $Value.ToString()
-    }
 }
 
 Export-ModuleMember -Function @(

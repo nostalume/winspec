@@ -26,8 +26,8 @@ function Resolve-InitOutputPath {
         [string]$OutputPath
     )
     
-    # If explicit path provided, use it
-    if ($OutputPath) {
+    # If explicit path provided and not empty, use it
+    if (-not [string]::IsNullOrWhiteSpace($OutputPath)) {
         return $OutputPath
     }
     
@@ -106,6 +106,12 @@ function Initialize-WinSpecConfig {
     # Resolve default output path if not provided
     $OutputPath = Resolve-InitOutputPath -OutputPath $OutputPath
     
+    # Validate output path is not empty or whitespace
+    if ([string]::IsNullOrWhiteSpace($OutputPath)) {
+        Write-Log -Level "ERROR" -Message "Invalid output path specified"
+        return $false
+    }
+    
     Write-Host ""
     Write-Log -Level "INFO" -Message "Starting WinSpec configuration initialization..."
     
@@ -128,7 +134,14 @@ function Initialize-WinSpecConfig {
     # 1. Export current system state
     Write-Host ""
     Write-Host "Scanning system state..." -ForegroundColor Cyan
-    $systemState = Export-SystemState -Providers $Providers
+    
+    try {
+        $systemState = Export-SystemState -Providers $Providers
+    }
+    catch {
+        Write-Log -Level "ERROR" -Message "Failed to export system state: $($_.Exception.Message)"
+        return $false
+    }
     
     if (-not $systemState -or $systemState.Count -le 2) {
         Write-Log -Level "WARN" -Message "No system state data captured"

@@ -5,7 +5,7 @@ BeforeAll {
     Import-Module "$PSScriptRoot\..\logging.psm1" -Force
     Import-Module "$PSScriptRoot\..\schema.psm1" -Force
     
-    # Mock all system-changing operations
+    # Mock all system-changing operations with specific parameter filters
     Mock Get-ItemProperty { 
         param($Path, $Name)
         return @{ $Name = 1 }  # Default mock return
@@ -19,10 +19,13 @@ BeforeAll {
         return @{ FullName = "MockPath" }
     }
     
-    Mock Test-Path { return $true }
+    # Use ParameterFilter for Test-Path to allow specific test scenarios
+    Mock Test-Path { return $true } -ParameterFilter { $Path -notmatch "NonExistent" }
+    Mock Test-Path { return $false } -ParameterFilter { $Path -match "NonExistent" }
     
     Mock Get-Service { 
-        return @{ Status = "Running"; Name = "MockService" }
+        param($Name)
+        return @{ Status = "Running"; Name = $Name }
     }
     
     Mock Get-WmiObject { 
@@ -34,7 +37,8 @@ BeforeAll {
     Mock Stop-Service { }
     
     Mock Get-WindowsOptionalFeature { 
-        return @{ State = "Enabled"; Name = "MockFeature" }
+        param($FeatureName)
+        return @{ State = "Enabled"; FeatureName = $FeatureName }
     }
     
     Mock Enable-WindowsOptionalFeature { }

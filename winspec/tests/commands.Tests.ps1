@@ -228,6 +228,24 @@ Describe "WinSpec CLI Commands - Spec Schema Validation" {
 
 Describe "WinSpec CLI Commands - Init Command" {
     Context "Initialize-WinSpecConfig" {
+        BeforeEach {
+            # Mock Export-SystemState to avoid reading real system state
+            Mock Export-SystemState -ModuleName init {
+                return @{
+                    Name = "test"
+                    Description = "test"
+                    Package = @{
+                        Installed = @("git", "nodejs")
+                    }
+                    Registry = @{
+                        Explorer = @{
+                            ShowHidden = $true
+                        }
+                    }
+                }
+            }
+        }
+        
         It "Should initialize new config" {
             $tempOutput = [System.IO.Path]::GetTempFileName() + ".ps1"
             Remove-Item $tempOutput -Force -ErrorAction SilentlyContinue
@@ -286,6 +304,22 @@ Describe "WinSpec CLI Commands - Init Command" {
             try {
                 Initialize-WinSpecConfig -OutputPath $tempOutput -Minimal
                 Test-Path $tempOutput | Should -Be $true
+            }
+            finally {
+                Remove-Item $tempOutput -Force -ErrorAction SilentlyContinue
+            }
+        }
+        
+        It "Should handle error when Export-SystemState fails" {
+            Mock Export-SystemState -ModuleName init { throw "Failed to export system state" }
+            
+            $tempOutput = [System.IO.Path]::GetTempFileName() + ".ps1"
+            Remove-Item $tempOutput -Force -ErrorAction SilentlyContinue
+            
+            try {
+                # Should return false when export fails
+                $result = Initialize-WinSpecConfig -OutputPath $tempOutput
+                $result | Should -Be $false
             }
             finally {
                 Remove-Item $tempOutput -Force -ErrorAction SilentlyContinue

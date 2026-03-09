@@ -3,6 +3,9 @@
 # Import dependent modules
 Import-Module (Join-Path $PSScriptRoot "..\logging.psm1") -Force
 
+# Import sandbox module once at module load time (consistent with service.psm1)
+Import-Module (Join-Path $PSScriptRoot "..\sandbox.psm1") -Force -ErrorAction SilentlyContinue
+
 function Get-ProviderInfo {
     return @{
         Name = "Feature"
@@ -29,6 +32,20 @@ function Get-FeatureState {
     }
 }
 
+# Helper function to check if feature is in desired state (eliminates duplicate logic)
+function Test-FeatureInDesiredState {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$DesiredState,
+        
+        [Parameter(Mandatory = $true)]
+        [string]$CurrentState
+    )
+    
+    return ($DesiredState -eq "enabled" -and $CurrentState -eq "Enabled") -or
+           ($DesiredState -eq "disabled" -and $CurrentState -eq "Disabled")
+}
+
 function Test-FeatureState {
     [CmdletBinding()]
     param (
@@ -47,8 +64,7 @@ function Test-FeatureState {
             continue
         }
         
-        $isDesired = ($desiredState -eq "enabled" -and $currentState -eq "Enabled") -or
-                     ($desiredState -eq "disabled" -and $currentState -eq "Disabled")
+        $isDesired = Test-FeatureInDesiredState -DesiredState $desiredState -CurrentState $currentState
         
         if (-not $isDesired) {
             $allInDesiredState = $false
@@ -77,8 +93,7 @@ function Set-FeatureState {
             continue
         }
         
-        $isDesired = ($desiredState -eq "enabled" -and $currentState -eq "Enabled") -or
-                     ($desiredState -eq "disabled" -and $currentState -eq "Disabled")
+        $isDesired = Test-FeatureInDesiredState -DesiredState $desiredState -CurrentState $currentState
         
         if ($isDesired) {
             Write-LogOk -Name $featureName -DesiredValue $desiredState
@@ -204,15 +219,7 @@ function Compare-FeatureState {
                 ConfigValue = $desiredState
             }
         }
-        else {
-            # State matches
-            $differences += @{
-                Type = "Equal"
-                Path = $path
-                SystemValue = $systemState
-                ConfigValue = $desiredState
-            }
-        }
+        # Skip "Equal" entries - only Added, Changed, Removed for cleaner diffs
     }
     
     # Check for removed features (in system but not in desired)
@@ -242,7 +249,7 @@ function Get-FeatureMockState {
     [CmdletBinding()]
     param()
     
-    Import-Module (Join-Path $PSScriptRoot "..\sandbox.psm1") -Force -ErrorAction SilentlyContinue
+    # Module already imported at module scope - no need to import again
     
     if (Test-SandboxActive) {
         return Get-SandboxState -Provider "Feature"
@@ -266,7 +273,7 @@ function Set-FeatureMockState {
         [hashtable]$State
     )
     
-    Import-Module (Join-Path $PSScriptRoot "..\sandbox.psm1") -Force -ErrorAction SilentlyContinue
+    # Module already imported at module scope
     
     if (Test-SandboxActive) {
         Set-SandboxState -Provider "Feature" -State $State
@@ -290,7 +297,7 @@ function Invoke-FeatureSandboxApply {
         [hashtable]$Desired
     )
     
-    Import-Module (Join-Path $PSScriptRoot "..\sandbox.psm1") -Force -ErrorAction SilentlyContinue
+    # Module already imported at module scope
     
     if (-not (Test-SandboxActive)) {
         throw "Not in sandbox mode"
@@ -326,6 +333,7 @@ function Invoke-FeatureSandboxApply {
 Export-ModuleMember -Function @(
     "Get-ProviderInfo"
     "Get-FeatureState"
+    "Test-FeatureInDesiredState"
     "Test-FeatureState"
     "Set-FeatureState"
     "Export-FeatureState"

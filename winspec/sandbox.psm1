@@ -2,7 +2,7 @@
 
 # Import dependent modules
 $ModuleRoot = $PSScriptRoot
-Import-Module (Join-Path $ModuleRoot "logging.psm1") -Force
+Import-Module (Join-Path $ModuleRoot "logging.psm1") -Global
 
 # Constants
 $Script:SandboxDir = Join-Path $env:USERPROFILE ".config\winspec\sandbox"

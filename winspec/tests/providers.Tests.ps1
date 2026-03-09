@@ -96,16 +96,30 @@ Describe "Service Provider" {
         Import-Module "$PSScriptRoot\..\managers\service.psm1" -Force
         
         # Mock service operations within the module scope
+        # OPTIMIZATION: Get-Service now returns both Status and StartType - no WMI needed
+        # Handle both: called with Name (single service) and without params (all services)
         Mock Get-Service -ModuleName service { 
             param($Name)
-            return [PSCustomObject]@{ 
-                Status = "Running"
-                Name = $Name
+            if ($Name) {
+                # Single service query
+                return [PSCustomObject]@{ 
+                    Status = "Running"
+                    Name = $Name
+                    StartType = "Automatic"
+                }
+            }
+            else {
+                # All services query (for Get-AllServiceStates)
+                return @(
+                    [PSCustomObject]@{ 
+                        Status = "Running"
+                        Name = "wuauserv"
+                        StartType = "Automatic"
+                    }
+                )
             }
         }
-        Mock Get-WmiObject -ModuleName service { 
-            return [PSCustomObject]@{ StartMode = "Automatic" }
-        }
+        # Get-WmiObject is no longer used - removed mock
         Mock Set-Service -ModuleName service { }
         Mock Start-Service -ModuleName service { }
         Mock Stop-Service -ModuleName service { }

@@ -3,6 +3,10 @@
 # Import dependent modules
 Import-Module (Join-Path $PSScriptRoot "..\logging.psm1") -Force
 Import-Module (Join-Path $PSScriptRoot "..\schema.psm1") -Force
+Import-Module (Join-Path $PSScriptRoot "..\registry-maps.ps1") -Force
+
+# Import sandbox module once at module load time (consistent with service.psm1)
+Import-Module (Join-Path $PSScriptRoot "..\sandbox.psm1") -Force -ErrorAction SilentlyContinue
 
 function Get-ProviderInfo {
     return @{
@@ -76,6 +80,20 @@ function Get-RegistryStateFromMap {
     }
     
     return $reverseMap[$RegistryValue]
+}
+
+# Helper function to build reverse map (used by Export-RegistryState to avoid duplication)
+function New-ReverseStateMap {
+    param(
+        [Parameter(Mandatory = $true)]
+        [hashtable]$StateMap
+    )
+    
+    $reverseMap = @{}
+    foreach ($key in $StateMap.Keys) {
+        $reverseMap[$StateMap[$key].ToString()] = $key
+    }
+    return $reverseMap
 }
 
 function Test-RegistryState {
@@ -217,11 +235,9 @@ function Export-RegistryState {
             
             if ($null -ne $value) {
                 # Apply reverse map if exists (convert registry value to friendly value)
+                # Use helper function to avoid duplicate reverse map logic
                 if ($propDef.Map) {
-                    $reverseMap = @{}
-                    foreach ($key in $propDef.Map.Keys) {
-                        $reverseMap[$propDef.Map[$key].ToString()] = $key
-                    }
+                    $reverseMap = New-ReverseStateMap -StateMap $propDef.Map
                     if ($reverseMap.ContainsKey($value.ToString())) {
                         $value = $reverseMap[$value.ToString()]
                     }
@@ -293,15 +309,7 @@ function Compare-RegistryState {
                     ConfigValue = $desiredValue
                 }
             }
-            else {
-                # Values match
-                $differences += @{
-                    Type = "Equal"
-                    Path = $path
-                    SystemValue = $systemValue
-                    ConfigValue = $desiredValue
-                }
-            }
+            # Skip "Equal" entries - only Added, Changed, Removed for cleaner diffs
         }
     }
     
@@ -320,7 +328,7 @@ function Get-RegistryMockState {
     [CmdletBinding()]
     param()
     
-    Import-Module (Join-Path $PSScriptRoot "..\sandbox.psm1") -Force -ErrorAction SilentlyContinue
+    # Module already imported at module scope - no need to import again
     
     if (Test-SandboxActive) {
         return Get-SandboxState -Provider "Registry"
@@ -345,7 +353,7 @@ function Set-RegistryMockState {
         [hashtable]$State
     )
     
-    Import-Module (Join-Path $PSScriptRoot "..\sandbox.psm1") -Force -ErrorAction SilentlyContinue
+    # Module already imported at module scope
     
     if (Test-SandboxActive) {
         Set-SandboxState -Provider "Registry" -State $State
@@ -369,7 +377,7 @@ function Invoke-RegistrySandboxApply {
         [hashtable]$Desired
     )
     
-    Import-Module (Join-Path $PSScriptRoot "..\sandbox.psm1") -Force -ErrorAction SilentlyContinue
+    # Module already imported at module scope
     
     if (-not (Test-SandboxActive)) {
         throw "Not in sandbox mode"
@@ -417,6 +425,7 @@ Export-ModuleMember -Function @(
     "Get-RegistryValue"
     "Set-RegistryValue"
     "Get-RegistryStateFromMap"
+    "New-ReverseStateMap"
     "Test-RegistryState"
     "Set-RegistryState"
     "Export-RegistryState"

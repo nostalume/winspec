@@ -1,11 +1,11 @@
 # core.psm1 - Core engine for WinSpec: resolve, plan, execute
 
-# Import dependent modules
+# Import dependent modules - do NOT re-import logging.psm1 with -Force as it causes scope issues
 $ModuleRoot = $PSScriptRoot
-Import-Module (Join-Path $ModuleRoot "logging.psm1") -Force
-Import-Module (Join-Path $ModuleRoot "schema.psm1") -Force
-Import-Module (Join-Path $ModuleRoot "checkpoint.psm1") -Force
-Import-Module (Join-Path $ModuleRoot "sandbox.psm1") -Force -ErrorAction SilentlyContinue
+Import-Module (Join-Path $ModuleRoot "schema.psm1") -ErrorAction Stop
+Import-Module (Join-Path $ModuleRoot "checkpoint.psm1") -ErrorAction Stop
+Import-Module (Join-Path $ModuleRoot "sandbox.psm1") -ErrorAction SilentlyContinue
+Import-Module (Join-Path $ModuleRoot "utils.psm1") -ErrorAction Stop
 
 function Import-Spec {
     <#
@@ -111,110 +111,42 @@ function Resolve-Spec {
     return $resolved
 }
 
-function Merge-Hashtables {
-    <#
-    .SYNOPSIS
-    Recursively merges two hashtables, with Override taking precedence.
-
-    .DESCRIPTION
-    Merges two hashtables recursively. When both values are hashtables, they are
-    merged recursively. When both values are arrays, they are merged with unique
-    values. Otherwise, the Override value replaces the Base value.
-
-    .PARAMETER Base
-    The base hashtable to merge into.
-
-    .PARAMETER Override
-    The hashtable containing values that override Base.
-
-    .PARAMETER MaxDepth
-    Maximum recursion depth to prevent circular reference issues. Default is 10.
-
-    .OUTPUTS
-    [hashtable] The merged hashtable.
-    #>
+function Import-Provider {
     [CmdletBinding()]
     param (
         [Parameter(Mandatory = $true)]
-        [ValidateNotNull()]
-        [hashtable]$Base,
-        
-        [Parameter(Mandatory = $true)]
-        [ValidateNotNull()]
-        [hashtable]$Override,
-        
-        [Parameter(Mandatory = $false)]
-        [int]$MaxDepth = 10,
-        
-        [Parameter(Mandatory = $false)]
-        [int]$CurrentDepth = 0
-    )
-    
-    # Prevent circular reference infinite loop
-    if ($CurrentDepth -gt $MaxDepth) {
-        Write-Warning "Merge-Hashtables: Maximum recursion depth ($MaxDepth) exceeded. Stopping merge to prevent infinite loop."
-        return $Base.Clone()
-    }
-    
-    $result = $Base.Clone()
-    
-    foreach ($key in $Override.Keys) {
-        if ($result.ContainsKey($key) -and $result[$key] -is [hashtable] -and $Override[$key] -is [hashtable]) {
-            # Recursively merge nested hashtables
-            $result[$key] = Merge-Hashtables -Base $result[$key] -Override $Override[$key] -MaxDepth $MaxDepth -CurrentDepth ($CurrentDepth + 1)
-        }
-        elseif ($result.ContainsKey($key) -and $result[$key] -is [array] -and $Override[$key] -is [array]) {
-            # Merge arrays (unique values)
-            $result[$key] = @($result[$key] + $Override[$key] | Select-Object -Unique)
-        }
-        else {
-            # Override with new value
-            $result[$key] = $Override[$key]
-        }
-    }
-    
-    return $result
-}
-
-function Import-ModuleSafe {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$Path,
-        
-        [Parameter(Mandatory = $true)]
         [string]$Name,
         
-        [Parameter(Mandatory = $false)]
-        [string]$Type = "Module"
+        [Parameter(Mandatory = $true)]
+        [ValidateSet("managers", "triggers")]
+        [string]$Type
     )
     
-    if (-not (Test-Path $Path)) {
-        Write-Log -Level "ERROR" -Message "$Type not found: $Name"
+    $providerPath = Get-ModulePath -Type $Type -Name $Name
+    if (-not (Test-Path $providerPath)) {
+        Write-Log -Level "ERROR" -Message "$($Type.TrimEnd('s')) not found: $Name"
         return $false
     }
     
     try {
-        Import-Module $Path -Force -ErrorAction Stop
-        Write-Log -Level "OK" -Message "Loaded $Type`: $Name"
+        Import-Module $providerPath -ErrorAction Stop
+        Write-Log -Level "OK" -Message "Loaded $($Type.TrimEnd('s')): $Name"
         return $true
     }
     catch {
-        Write-Log -Level "ERROR" -Message "Failed to load $Type`: $Name"
-        Write-Log -Level "ERROR" -Message $_.Exception.Message
+        Write-Log -Level "ERROR" -Message "Failed to load $($Type.TrimEnd('s')): $Name - $($_.Exception.Message)"
         return $false
     }
 }
 
+# Aliases for backward compatibility
 function Import-Manager {
     [CmdletBinding()]
     param (
         [Parameter(Mandatory = $true)]
         [string]$Name
     )
-
-    $managerPath = Get-ModulePath -Type "managers" -Name $Name
-    return Import-ModuleSafe -Path $managerPath -Name $Name -Type "Manager"
+    return Import-Provider -Name $Name -Type "managers"
 }
 
 function Get-DiscoveredProviders {
@@ -268,24 +200,13 @@ function Get-DiscoveredProviders {
 
     foreach ($file in $files) {
         try {
-            # Import the module temporarily to get provider info
-            Import-Module $file.FullName -Force -ErrorAction Stop
-
-            # Get the imported module to call its exported function in the correct scope
-            $importedModule = Get-Module $file.BaseName -ErrorAction SilentlyContinue
+            # Import the module temporarily
+            $importedModule = Import-Module $file.FullName -PassThru -ErrorAction Stop
             
-            # Call Get-ProviderInfo from the provider module's scope
-            # Each provider exports this function to declare its metadata
-            $info = if ($importedModule) {
-                & $importedModule { Get-ProviderInfo }
-            }
-            else {
-                # Fallback: try to get the command from the imported module
-                $cmd = Get-Command -Module $file.BaseName -Name "Get-ProviderInfo" -ErrorAction SilentlyContinue
-                if ($cmd) { & $cmd }
-            }
-
-            if ($null -ne $info -and -not [string]::IsNullOrEmpty($info.Name) -and $info.Type -eq $Type) {
+            # Get provider metadata via the exported function
+            $info = & $importedModule Get-ProviderInfo
+            
+            if ($null -ne $info -and $info.Name -and $info.Type -eq $Type) {
                 if ($Display) {
                     $description = if ($info.Description) { $info.Description } else { "$Type provider" }
                     Write-Log -Level "INFO" -Message "$Prefix$($info.Name) - $description"
@@ -479,6 +400,83 @@ function Resolve-ConfigLocation {
     return $null
 }
 
+function Resolve-SpecPath {
+    <#
+    .SYNOPSIS
+    Resolves the specification file path.
+
+    .DESCRIPTION
+    Searches for the WinSpec specification file using the following precedence:
+    1. Explicit Spec parameter
+    2. WINSPEC_SPEC environment variable
+    3. Config directory with default name (default.ps1, config.ps1, winspec.ps1)
+    4. .winspec.ps1 in current directory
+
+    .PARAMETER SpecPath
+    Optional explicit path to the specification file.
+
+    .PARAMETER ConfigPath
+    Optional path to the configuration directory to search in.
+
+    .OUTPUTS
+    [string] The resolved specification path, or $null if not found.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $false)]
+        [string]$SpecPath,
+        
+        [Parameter(Mandatory = $false)]
+        [string]$ConfigPath
+    )
+    
+    # 1. Explicit argument (highest priority)
+    if ($SpecPath) {
+        if (Test-Path $SpecPath) {
+            return $SpecPath
+        }
+    }
+    
+    # 2. Environment variable
+    if ($env:WINSPEC_SPEC -and (Test-Path $env:WINSPEC_SPEC)) {
+        return $env:WINSPEC_SPEC
+    }
+    
+    # 3. Check config directory for default spec files
+    $resolvedConfigPath = $ConfigPath
+    if (-not $resolvedConfigPath) {
+        $resolvedConfigPath = Resolve-ConfigLocation
+    }
+    
+    if ($resolvedConfigPath) {
+        # Check if configPath is a file (.winspec.ps1) or directory
+        if ((Test-Path $resolvedConfigPath) -and (Get-Item $resolvedConfigPath).PSIsContainer) {
+            $configDir = $resolvedConfigPath
+        } elseif (Test-Path $resolvedConfigPath) {
+            $configDir = Split-Path $resolvedConfigPath -Parent
+        }
+        
+        if ($configDir) {
+            # Look for common spec file names (including dot-prefixed)
+            $defaultSpecs = @(".winspec.ps1", "default.ps1", "config.ps1", "winspec.ps1", "main.ps1")
+            foreach ($specName in $defaultSpecs) {
+                $specFile = Join-Path $configDir $specName
+                if (Test-Path $specFile) {
+                    return $specFile
+                }
+            }
+        }
+    }
+    
+    # 4. .winspec.ps1 in current directory
+    $defaultPath = Join-Path $PWD ".winspec.ps1"
+    if (Test-Path $defaultPath) {
+        return $defaultPath
+    }
+    
+    return $null
+}
+
 # Find trigger script in multiple locations
 function Find-TriggerScript {
     [CmdletBinding()]
@@ -619,16 +617,14 @@ function Invoke-CustomTrigger {
     }
 }
 
-# Import built-in trigger module
+# Alias for backward compatibility
 function Import-BuiltInTrigger {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
         [string]$Name
     )
-
-    $triggerPath = Get-ModulePath -Type "triggers" -Name $Name
-    return Import-ModuleSafe -Path $triggerPath -Name $Name -Type "Trigger"
+    return Import-Provider -Name $Name -Type "triggers"
 }
 
 function Get-AllTriggers {
@@ -652,22 +648,15 @@ function Get-AllTriggers {
         [string]$ConfigPath
     )
     
-    $triggers = @()
-    
     # Discover built-in triggers from winspec/triggers/
     $builtInPath = Join-Path $ModuleRoot "triggers"
-    $builtInTriggers = Get-DiscoveredProviders -Path $builtInPath -Type "Trigger"
-    $triggers += $builtInTriggers
+    $triggers = Get-DiscoveredProviders -Path $builtInPath -Type "Trigger"
     
     # Discover user triggers from config directory
-    if (-not [string]::IsNullOrEmpty($ConfigPath)) {
+    if ($ConfigPath) {
         $userPath = Join-Path $ConfigPath "triggers"
         $userTriggers = Get-DiscoveredProviders -Path $userPath -Type "Trigger"
-        foreach ($trigger in $userTriggers) {
-            if ($triggers -notcontains $trigger) {
-                $triggers += $trigger
-            }
-        }
+        $triggers = @($triggers + $userTriggers | Select-Object -Unique)
     }
     
     return $triggers
@@ -840,7 +829,7 @@ function Invoke-WinSpec {
     
     # 3. Validate against schemas
     Write-Log -Level "INFO" -Message "Validating specification..."
-    if (-not (Test-Spec -Config $resolved)) {
+    if (-not (Test-SpecSchema -Config $resolved)) {
         Write-Log -Level "ERROR" -Message "Specification validation failed"
         return @{ Success = $false; Error = "Validation failed" }
     }
@@ -947,6 +936,7 @@ function Get-SystemStatus {
 Export-ModuleMember -Function @(
     "Import-Spec"
     "Resolve-Spec"
+    "Resolve-SpecPath"
     "Merge-Hashtables"
     "Import-Manager"
     "Import-BuiltInTrigger"

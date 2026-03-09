@@ -59,6 +59,83 @@ Describe "Initialize-WinSpecConfig" {
         $result = Initialize-WinSpecConfig -OutputPath $TestPath -Minimal
         $result | Should -Be $false
     }
+    
+    It "Should handle error from Export-SystemState" {
+        Mock Export-SystemState -ModuleName init {
+            throw "Failed to export system state"
+        }
+        
+        $result = Initialize-WinSpecConfig -OutputPath $TestPath
+        $result | Should -Be $false
+    }
+    
+    It "Should include all providers when no Providers parameter specified" {
+        Mock Export-SystemState -ModuleName init {
+            return @{
+                Name = "test"
+                Description = "test"
+                Package = @{ Installed = @("git") }
+                Registry = @{ Explorer = @{ ShowHidden = $true } }
+                Service = @{ wuauserv = @{ State = "running" } }
+                Feature = @{ "Microsoft-Windows-Subsystem-Linux" = "enabled" }
+            }
+        }
+        
+        $result = Initialize-WinSpecConfig -OutputPath $TestPath
+        $result | Should -Be $true
+        
+        $content = Get-Content $TestPath -Raw
+        $content | Should -Match "Package"
+        $content | Should -Match "Registry"
+        $content | Should -Match "Service"
+        $content | Should -Match "Feature"
+    }
+    
+    It "Should filter providers correctly with specific Providers parameter" {
+        Mock Export-SystemState -ModuleName init {
+            param($Providers)
+            $state = @{
+                Name = "test"
+                Description = "test"
+                Package = @{ Installed = @("git") }
+                Registry = @{ Explorer = @{ ShowHidden = $true } }
+                Service = @{ wuauserv = @{ State = "running" } }
+                Feature = @{ "Microsoft-Windows-Subsystem-Linux" = "enabled" }
+            }
+            
+            # Filter to only requested providers
+            $result = @{}
+            if ($Providers -contains "Package") { $result.Package = $state.Package }
+            if ($Providers -contains "Registry") { $result.Registry = $state.Registry }
+            if ($Providers -contains "Service") { $result.Service = $state.Service }
+            if ($Providers -contains "Feature") { $result.Feature = $state.Feature }
+            $result.Name = $state.Name
+            $result.Description = $state.Description
+            return $result
+        }
+        
+        # Only request Package and Registry
+        $result = Initialize-WinSpecConfig -OutputPath $TestPath -Providers @("Package", "Registry")
+        $result | Should -Be $true
+        
+        $content = Get-Content $TestPath -Raw
+        $content | Should -Match "Package"
+        $content | Should -Match "Registry"
+        # Should NOT include Service and Feature when not requested
+        $content | Should -Not -Match "[\r\n]\s*Service\s*="
+        $content | Should -Not -Match "[\r\n]\s*Feature\s*="
+    }
+    
+    It "Should use default path when output path is empty" {
+        Mock Export-SystemState -ModuleName init {
+            return @{ Name = "test"; Description = "test" }
+        }
+        
+        # When empty string is provided, it should use default path
+        $result = Initialize-WinSpecConfig -OutputPath ""
+        # Empty string resolves to default path, so it should succeed
+        $result | Should -Be $true
+    }
 }
 
 Describe "Show-StateSummary" {

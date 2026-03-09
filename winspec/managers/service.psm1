@@ -3,6 +3,9 @@
 # Import dependent modules
 Import-Module (Join-Path $PSScriptRoot "..\logging.psm1") -Force
 
+# Import sandbox module once at module load time
+Import-Module (Join-Path $PSScriptRoot "..\sandbox.psm1") -Force -ErrorAction SilentlyContinue
+
 function Get-ProviderInfo {
     return @{
         Name = "Service"
@@ -11,19 +14,42 @@ function Get-ProviderInfo {
 }
 
 function Get-ServiceState {
+    <#
+    .SYNOPSIS
+        Gets the state of a specific service.
+    .DESCRIPTION
+        Uses cached service data when available to avoid redundant queries.
+    .PARAMETER ServiceName
+        Name of the service to query.
+    .PARAMETER ServiceCache
+        Optional hashtable of pre-fetched services for batch operations.
+    .OUTPUTS
+        Hashtable with State and Startup properties, or null if not found.
+    #>
     [CmdletBinding()]
     param (
         [Parameter(Mandatory = $true)]
-        [string]$ServiceName
+        [string]$ServiceName,
+        
+        [Parameter(Mandatory = $false)]
+        [hashtable]$ServiceCache
     )
     
     try {
-        $service = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+        # Use cache if provided, otherwise query directly
+        if ($null -ne $ServiceCache -and $ServiceCache.ContainsKey($ServiceName)) {
+            $service = $ServiceCache[$ServiceName]
+        }
+        else {
+            $service = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+        }
+        
         if ($service) {
-            $startup = (Get-WmiObject -Class Win32_Service -Filter "Name='$ServiceName'" -ErrorAction SilentlyContinue).StartMode
+            # Get-Service already has StartType property - no need for WMI!
+            # Maintain lowercase for backward compatibility
             return @{
                 State   = $service.Status.ToString().ToLower()
-                Startup = $startup.ToLower()
+                Startup = $service.StartType.ToString().ToLower()
             }
         }
         return $null
@@ -33,7 +59,70 @@ function Get-ServiceState {
     }
 }
 
+function Get-AllServiceStates {
+    <#
+    .SYNOPSIS
+        Gets states of multiple services in a single query.
+    .DESCRIPTION
+        Fetches all services once and returns a hashtable of service states.
+        This is the efficient batch operation - O(1) instead of O(n) queries.
+    .PARAMETER ServiceNames
+        Array of service names to fetch. If empty, returns all services.
+    .OUTPUTS
+        Hashtable with service names as keys and state objects as values.
+    #>
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory = $false)]
+        [string[]]$ServiceNames = @()
+    )
+    
+    $result = @{}
+    
+    try {
+        # Get all services in ONE call - this is the key optimization
+        $allServices = @{}
+        foreach ($svc in Get-Service) {
+            $allServices[$svc.Name] = $svc
+        }
+        
+        # If specific services requested, filter; otherwise return all
+        if ($ServiceNames.Count -gt 0) {
+            foreach ($serviceName in $ServiceNames) {
+                if ($allServices.ContainsKey($serviceName)) {
+                    $service = $allServices[$serviceName]
+                    $result[$serviceName] = @{
+                        State   = $service.Status.ToString().ToLower()
+                        Startup = $service.StartType.ToString().ToLower()
+                    }
+                }
+            }
+        }
+        else {
+            # Return all services
+            foreach ($serviceName in $allServices.Keys) {
+                $service = $allServices[$serviceName]
+                $result[$serviceName] = @{
+                    State   = $service.Status.ToString().ToLower()
+                    Startup = $service.StartType.ToString().ToLower()
+                }
+            }
+        }
+    }
+    catch {
+        # Return empty hashtable on error
+    }
+    
+    return $result
+}
+
 function Test-ServiceState {
+    <#
+    .SYNOPSIS
+        Tests if services match desired configuration.
+    .DESCRIPTION
+        Uses batch query to get all service states efficiently.
+    #>
     [CmdletBinding()]
     param (
         [Parameter(Mandatory = $true)]
@@ -42,20 +131,24 @@ function Test-ServiceState {
     
     $allInDesiredState = $true
     
+    # OPTIMIZATION: Fetch all services in ONE query, then lookup
+    $allServiceStates = Get-AllServiceStates -ServiceNames $Desired.Keys
+    
     foreach ($serviceName in $Desired.Keys) {
         $desiredConfig = $Desired[$serviceName]
-        $currentState = Get-ServiceState -ServiceName $serviceName
+        $currentState = $allServiceStates[$serviceName]
         
         if ($null -eq $currentState) {
             Write-Log -Level "WARN" -Message "Service not found: $serviceName"
             continue
         }
         
-        if ($desiredConfig.State -and $currentState.State -ne $desiredConfig.State) {
+        # Use case-insensitive comparison - no ToLower() needed
+        if ($desiredConfig.State -and -not ($currentState.State -eq $desiredConfig.State -or $currentState.State.ToLower() -eq $desiredConfig.State.ToLower())) {
             $allInDesiredState = $false
         }
         
-        if ($desiredConfig.Startup -and $currentState.Startup -ne $desiredConfig.Startup) {
+        if ($desiredConfig.Startup -and -not ($currentState.Startup -eq $desiredConfig.Startup -or $currentState.Startup.ToLower() -eq $desiredConfig.Startup.ToLower())) {
             $allInDesiredState = $false
         }
     }
@@ -64,6 +157,12 @@ function Test-ServiceState {
 }
 
 function Set-ServiceState {
+    <#
+    .SYNOPSIS
+        Sets service state and startup configuration.
+    .DESCRIPTION
+        Uses batch query to get current states efficiently.
+    #>
     [CmdletBinding(SupportsShouldProcess = $true)]
     param (
         [Parameter(Mandatory = $true)]
@@ -72,9 +171,12 @@ function Set-ServiceState {
     
     $results = @{}
     
+    # OPTIMIZATION: Fetch all services in ONE query
+    $allServiceStates = Get-AllServiceStates -ServiceNames $Desired.Keys
+    
     foreach ($serviceName in $Desired.Keys) {
         $desiredConfig = $Desired[$serviceName]
-        $currentState = Get-ServiceState -ServiceName $serviceName
+        $currentState = $allServiceStates[$serviceName]
         
         if ($null -eq $currentState) {
             Write-Log -Level "ERROR" -Message "Service not found: $serviceName"
@@ -86,17 +188,23 @@ function Set-ServiceState {
         
         # Handle Startup configuration
         if ($desiredConfig.Startup) {
-            if ($currentState.Startup -eq $desiredConfig.Startup) {
+            $currentStartup = $currentState.Startup
+            $desiredStartup = $desiredConfig.Startup
+            
+            # Case-insensitive comparison
+            $startupMatch = $currentStartup -eq $desiredStartup -or $currentStartup.ToLower() -eq $desiredStartup.ToLower()
+            
+            if ($startupMatch) {
                 Write-LogOk -Name "$serviceName.Startup" -DesiredValue $desiredConfig.Startup
                 $serviceResults["Startup"] = @{ Status = "AlreadySet" }
             }
             else {
-                Write-LogChange -Name "$serviceName.Startup" -CurrentValue $currentState.Startup -DesiredValue $desiredConfig.Startup
+                Write-LogChange -Name "$serviceName.Startup" -CurrentValue $currentStartup -DesiredValue $desiredStartup
                 
-                if ($PSCmdlet.ShouldProcess("$serviceName Startup", "Set to '$($desiredConfig.Startup)'")) {
+                if ($PSCmdlet.ShouldProcess("$serviceName Startup", "Set to '$desiredStartup'")) {
                     try {
-                        Set-Service -Name $serviceName -StartupType $desiredConfig.Startup -ErrorAction Stop
-                        Write-LogApplied -Name "$serviceName.Startup" -DesiredValue $desiredConfig.Startup
+                        Set-Service -Name $serviceName -StartupType $desiredStartup -ErrorAction Stop
+                        Write-LogApplied -Name "$serviceName.Startup" -DesiredValue $desiredStartup
                         $serviceResults["Startup"] = @{ Status = "Applied" }
                     }
                     catch {
@@ -113,8 +221,12 @@ function Set-ServiceState {
             $currentStateValue = $currentState.State
             
             # Map running/stopped to PowerShell service status
-            $isRunning = $currentStateValue -eq "running"
+            $isRunning = $currentStateValue -eq "Running"
             $shouldBeRunning = $desiredState -eq "running"
+            
+            # Case-insensitive check
+            if ($currentStateValue.ToLower() -eq "running") { $isRunning = $true }
+            if ($desiredState.ToLower() -eq "running") { $shouldBeRunning = $true }
             
             if ($isRunning -eq $shouldBeRunning) {
                 Write-LogOk -Name "$serviceName.State" -DesiredValue $desiredState
@@ -155,6 +267,7 @@ function Export-ServiceState {
     .DESCRIPTION
         Captures current state and startup configuration for services.
         By default exports services with non-automatic startup or stopped state.
+        OPTIMIZATION: Uses single batch query instead of per-service queries.
     .PARAMETER ServiceNames
         Optional array of specific service names to export.
     .OUTPUTS
@@ -171,14 +284,26 @@ function Export-ServiceState {
     # If no specific services requested, export interesting ones
     # (those that are not running with automatic startup)
     if ($ServiceNames.Count -eq 0) {
-        $interestingServices = Get-Service | Where-Object { 
+        # OPTIMIZATION: Single query to get all services
+        $allServices = Get-Service | Where-Object { 
             $_.StartType -ne 'Automatic' -or $_.Status -ne 'Running'
-        } | Select-Object -ExpandProperty Name -First 50
-        $ServiceNames = $interestingServices
+        }
+        
+        # Build list from filtered services
+        $ServiceNames = @()
+        $count = 0
+        foreach ($svc in $allServices) {
+            if ($count -ge 50) { break }
+            $ServiceNames += $svc.Name
+            $count++
+        }
     }
     
+    # OPTIMIZATION: Single batch query for all requested services
+    $allServiceStates = Get-AllServiceStates -ServiceNames $ServiceNames
+    
     foreach ($serviceName in $ServiceNames) {
-        $state = Get-ServiceState -ServiceName $serviceName
+        $state = $allServiceStates[$serviceName]
         if ($state) {
             $result[$serviceName] = @{
                 State = $state.State
@@ -277,7 +402,7 @@ function Get-ServiceMockState {
     [CmdletBinding()]
     param()
     
-    Import-Module (Join-Path $PSScriptRoot "..\sandbox.psm1") -Force -ErrorAction SilentlyContinue
+    # Module already imported at module scope - no need to import again
     
     if (Test-SandboxActive) {
         return Get-SandboxState -Provider "Service"
@@ -301,7 +426,7 @@ function Set-ServiceMockState {
         [hashtable]$State
     )
     
-    Import-Module (Join-Path $PSScriptRoot "..\sandbox.psm1") -Force -ErrorAction SilentlyContinue
+    # Module already imported at module scope
     
     if (Test-SandboxActive) {
         Set-SandboxState -Provider "Service" -State $State
@@ -325,7 +450,7 @@ function Invoke-ServiceSandboxApply {
         [hashtable]$Desired
     )
     
-    Import-Module (Join-Path $PSScriptRoot "..\sandbox.psm1") -Force -ErrorAction SilentlyContinue
+    # Module already imported at module scope
     
     if (-not (Test-SandboxActive)) {
         throw "Not in sandbox mode"
@@ -361,6 +486,7 @@ function Invoke-ServiceSandboxApply {
 Export-ModuleMember -Function @(
     "Get-ProviderInfo"
     "Get-ServiceState"
+    "Get-AllServiceStates"
     "Test-ServiceState"
     "Set-ServiceState"
     "Export-ServiceState"

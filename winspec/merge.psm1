@@ -3,6 +3,7 @@
 
 # Import dependent modules
 Import-Module (Join-Path $PSScriptRoot "logging.psm1") -Force
+Import-Module (Join-Path $PSScriptRoot "utils.psm1") -Force
 
 function Merge-Configuration {
     <#
@@ -48,14 +49,14 @@ function Merge-Configuration {
     Write-Log -Level "INFO" -Message "Incoming: $IncomingPath"
     Write-Log -Level "INFO" -Message "Strategy: $Strategy"
     
-    # Load configurations
-    $baseConfig = Import-MergeSpec -Path $BasePath
+    # Load configurations using shared utility
+    $baseConfig = Import-Configuration -Path $BasePath
     if (-not $baseConfig) {
         Write-Log -Level "ERROR" -Message "Failed to load base configuration"
         return $null
     }
     
-    $incomingConfig = Import-MergeSpec -Path $IncomingPath
+    $incomingConfig = Import-Configuration -Path $IncomingPath
     if (-not $incomingConfig) {
         Write-Log -Level "ERROR" -Message "Failed to load incoming configuration"
         return $null
@@ -67,7 +68,7 @@ function Merge-Configuration {
     if ($mergeResult.Success) {
         # Write output if specified
         if ($OutputPath) {
-            Export-MergedConfig -Config $mergeResult.Merged -Path $OutputPath
+            $null = Save-Configuration -Config $mergeResult.Merged -Path $OutputPath
         }
         
         Write-Log -Level "OK" -Message "Merge completed successfully"
@@ -79,38 +80,6 @@ function Merge-Configuration {
     }
     
     return $mergeResult
-}
-
-function Import-MergeSpec {
-    <#
-    .SYNOPSIS
-        Imports a specification file for merging.
-    #>
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$Path
-    )
-    
-    if (-not (Test-Path $Path)) {
-        Write-Log -Level "ERROR" -Message "Spec file not found: $Path"
-        return $null
-    }
-    
-    try {
-        $config = & $Path
-        
-        if ($config -isnot [hashtable]) {
-            Write-Log -Level "ERROR" -Message "Spec must return a hashtable: $Path"
-            return $null
-        }
-        
-        return $config
-    }
-    catch {
-        Write-Log -Level "ERROR" -Message "Failed to parse spec: $($_.Exception.Message)"
-        return $null
-    }
 }
 
 function Invoke-MergeEngine {
@@ -254,7 +223,7 @@ function Resolve-MergeItem {
             }
             "skip" {
                 # Keep both values as array for later resolution
-                $result.Value = @($BaseValue, $incomingValue)
+                $result.Value = @($BaseValue, $IncomingValue)
                 $result.Resolved = $false
             }
         }
@@ -270,58 +239,6 @@ function Resolve-MergeItem {
     }
     
     return $result
-}
-
-function Test-ValuesEqual {
-    <#
-    .SYNOPSIS
-        Tests if two values are equal, handling hashtables and arrays.
-    #>
-    param($Value1, $Value2)
-    
-    if ($Value1 -eq $null -and $Value2 -eq $null) {
-        return $true
-    }
-    
-    if ($Value1 -eq $null -or $Value2 -eq $null) {
-        return $false
-    }
-    
-    $type1 = $Value1.GetType()
-    $type2 = $Value2.GetType()
-    
-    if ($type1 -ne $type2) {
-        return $false
-    }
-    
-    if ($Value1 -is [hashtable]) {
-        if ($Value1.Count -ne $Value2.Count) {
-            return $false
-        }
-        foreach ($key in $Value1.Keys) {
-            if (-not $Value2.ContainsKey($key)) {
-                return $false
-            }
-            if (-not (Test-ValuesEqual -Value1 $Value1[$key] -Value2 $Value2[$key])) {
-                return $false
-            }
-        }
-        return $true
-    }
-    
-    if ($Value1 -is [array]) {
-        if ($Value1.Count -ne $Value2.Count) {
-            return $false
-        }
-        for ($i = 0; $i -lt $Value1.Count; $i++) {
-            if (-not (Test-ValuesEqual -Value1 $Value1[$i] -Value2 $Value2[$i])) {
-                return $false
-            }
-        }
-        return $true
-    }
-    
-    return $Value1 -eq $Value2
 }
 
 function Resolve-ByStrategy {
@@ -456,10 +373,10 @@ function Invoke-ConflictResolution {
     Write-Host "Path: $Path" -ForegroundColor Cyan
     Write-Host ""
     Write-Host "Base (ours):" -ForegroundColor Yellow
-    Write-Host (Format-ValueForDisplay -Value $BaseValue)
+    Write-Host (ConvertTo-DetailedDisplayValue -Value $BaseValue)
     Write-Host ""
     Write-Host "Incoming (theirs):" -ForegroundColor Yellow
-    Write-Host (Format-ValueForDisplay -Value $IncomingValue)
+    Write-Host (ConvertTo-DetailedDisplayValue -Value $IncomingValue)
     Write-Host ""
     Write-Host "Options:" -ForegroundColor Green
     Write-Host "  [b] Keep base (ours)" -ForegroundColor White
@@ -495,147 +412,6 @@ function Invoke-ConflictResolution {
             }
         }
     } while ($true)
-}
-
-function Format-ValueForDisplay {
-    <#
-    .SYNOPSIS
-        Formats a value for display in conflict resolution.
-    #>
-    param($Value)
-    
-    if ($null -eq $Value) {
-        return "<null>"
-    }
-    
-    if ($Value -is [hashtable]) {
-        $lines = @()
-        foreach ($key in $Value.Keys) {
-            $lines += "  $key = $(Format-ValueForDisplay -Value $Value[$key])"
-        }
-        return "@{`n$($lines -join "`n")`n}"
-    }
-    
-    if ($Value -is [array]) {
-        if ($Value.Count -eq 0) {
-            return "@()"
-        }
-        $items = $Value | ForEach-Object { Format-ValueForDisplay -Value $_ }
-        return "@($($items -join ', '))"
-    }
-    
-    if ($Value -is [string]) {
-        return '"' + $Value + '"'
-    }
-    
-    return $Value.ToString()
-}
-
-function Export-MergedConfig {
-    <#
-    .SYNOPSIS
-        Exports merged configuration to a file.
-    #>
-    param(
-        [hashtable]$Config,
-        [string]$Path
-    )
-    
-    try {
-        # Determine format from extension
-        $extension = [System.IO.Path]::GetExtension($Path).ToLower()
-        
-        if ($extension -eq ".json") {
-            $json = $Config | ConvertTo-Json -Depth 10
-            $json | Out-File -FilePath $Path -Encoding UTF8
-        }
-        else {
-            # PowerShell hashtable format
-            $content = ConvertTo-HashtableString -Hashtable $Config -IndentLevel 0
-            $content | Out-File -FilePath $Path -Encoding UTF8
-        }
-        
-        Write-Log -Level "OK" -Message "Merged configuration saved to: $Path"
-    }
-    catch {
-        Write-Log -Level "ERROR" -Message "Failed to save merged configuration: $($_.Exception.Message)"
-    }
-}
-
-function ConvertTo-HashtableString {
-    <#
-    .SYNOPSIS
-        Converts a hashtable to a PowerShell hashtable string representation.
-    #>
-    param(
-        [hashtable]$Hashtable,
-        [int]$IndentLevel = 0
-    )
-    
-    $indent = "    " * $IndentLevel
-    $lines = @()
-    
-    if ($IndentLevel -eq 0) {
-        $lines += "@{"
-    }
-    
-    foreach ($key in $Hashtable.Keys) {
-        $value = $Hashtable[$key]
-        $formattedValue = Format-ValueForExport -Value $value -IndentLevel ($IndentLevel + 1)
-        $lines += "$indent    $key = $formattedValue"
-    }
-    
-    if ($IndentLevel -eq 0) {
-        $lines += "}"
-    }
-    
-    return $lines -join "`n"
-}
-
-function Format-ValueForExport {
-    <#
-    .SYNOPSIS
-        Formats a value for export as PowerShell code.
-    #>
-    param($Value, [int]$IndentLevel)
-    
-    $indent = "    " * $IndentLevel
-    
-    if ($null -eq $Value) {
-        return '$null'
-    }
-    
-    if ($Value -is [bool]) {
-        return '$' + $Value.ToString().ToLower()
-    }
-    
-    if ($Value -is [int] -or $Value -is [long] -or $Value -is [double]) {
-        return $Value.ToString()
-    }
-    
-    if ($Value -is [string]) {
-        return '"' + $Value.Replace('"', '""') + '"'
-    }
-    
-    if ($Value -is [array]) {
-        if ($Value.Count -eq 0) {
-            return '@()'
-        }
-        $items = $Value | ForEach-Object { Format-ValueForExport -Value $_ -IndentLevel $IndentLevel }
-        return "@($($items -join ', '))"
-    }
-    
-    if ($Value -is [hashtable]) {
-        $lines = @("@{`n")
-        foreach ($key in $Value.Keys) {
-            $formattedValue = Format-ValueForExport -Value $Value[$key] -IndentLevel ($IndentLevel + 1)
-            $lines += "$indent    $key = $formattedValue`n"
-        }
-        $lines += "$indent}"
-        return $lines -join ""
-    }
-    
-    return '"' + $Value.ToString() + '"'
 }
 
 function Format-MergeReport {

@@ -1,8 +1,8 @@
 # schema.psm1 - Type definitions and validation for WinSpec
 
 # Import dependent modules
-Import-Module (Join-Path $PSScriptRoot "logging.psm1") -Force
-Import-Module (Join-Path $PSScriptRoot "registry-maps.ps1") -Force
+Import-Module (Join-Path $PSScriptRoot "logging.psm1") -Global
+Import-Module (Join-Path $PSScriptRoot "registry-maps.ps1") -Global
 
 # Provider type enumeration
 enum ProviderType {

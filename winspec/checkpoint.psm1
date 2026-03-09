@@ -1,5 +1,7 @@
 # checkpoint.psm1 - Restore point management for WinSpec
 
+Import-Module (Join-Path $PSScriptRoot "logging.psm1") -Global
+
 function Test-SystemRestoreEnabled {
     [CmdletBinding()]
     param()
