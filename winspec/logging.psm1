@@ -185,19 +185,19 @@ function Write-LogSection {
     Write-Host "[$Name]" -ForegroundColor Yellow
 }
 
-Export-ModuleMember -Function @(
-    "Write-Log"
-    "Write-LogProcess"
-    "Write-LogOk"
-    "Write-LogApplied"
-    "Write-LogChange"
-    "Write-LogError"
-    "Write-LogHeader"
-    "Write-LogSection"
-    "INFO"
-    "OK"
-    "APPLIED"
-    "WARN"
-    "ERROR"
-    "CHANGE"
-)
+# Export-ModuleMember -Function @(
+#     "Write-Log"
+#     "Write-LogProcess"
+#     "Write-LogOk"
+#     "Write-LogApplied"
+#     "Write-LogChange"
+#     "Write-LogError"
+#     "Write-LogHeader"
+#     "Write-LogSection"
+#     "INFO"
+#     "OK"
+#     "APPLIED"
+#     "WARN"
+#     "ERROR"
+#     "CHANGE"
+# )

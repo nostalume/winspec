@@ -3,7 +3,7 @@
 # Import dependent modules
 Import-Module (Join-Path $PSScriptRoot "..\logging.psm1") -Force
 Import-Module (Join-Path $PSScriptRoot "..\schema.psm1") -Force
-Import-Module (Join-Path $PSScriptRoot "..\registry-maps.ps1") -Force
+Import-Module (Join-Path $PSScriptRoot "..\registry-maps.psm1") -Force
 
 # Import sandbox module once at module load time (consistent with service.psm1)
 Import-Module (Join-Path $PSScriptRoot "..\sandbox.psm1") -Force -ErrorAction SilentlyContinue

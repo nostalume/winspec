@@ -3,10 +3,14 @@
 BeforeAll {
     $script:WinspecRoot = $PSScriptRoot | Split-Path -Parent
     
-    Import-Module "$script:WinspecRoot\logging.psm1" -Force
-    Import-Module "$script:WinspecRoot\core.psm1" -Force
-    Import-Module "$script:WinspecRoot\schema.psm1" -Force
-    Import-Module "$script:WinspecRoot\init.psm1" -Force
+    # Import in correct order - logging first, then dependencies
+    Import-Module "$script:WinspecRoot\logging.psm1" -Force -Global
+    Import-Module "$script:WinspecRoot\utils.psm1" -Force -Global
+    Import-Module "$script:WinspecRoot\registry-maps.psm1" -Force -Global
+    Import-Module "$script:WinspecRoot\schema.psm1" -Force -Global
+    Import-Module "$script:WinspecRoot\exec.psm1" -Force -Global
+    Import-Module "$script:WinspecRoot\pull.psm1" -Force -Global
+    Import-Module "$script:WinspecRoot\push.psm1" -Force -Global
     
     # Helper function to create temp spec file
     function New-TempSpecFile {
@@ -343,7 +347,7 @@ Describe "WinSpec CLI Commands - Provider Discovery" {
         }
         
         It "Should discover trigger providers" {
-            Import-Module "$script:WinspecRoot\core.psm1" -Force
+            Import-Module "$script:WinspecRoot\exec.psm1" -Force
             
             $triggersPath = Join-Path $script:WinspecRoot "triggers"
             $triggers = Get-DiscoveredProviders -Path $triggersPath -Type "Trigger"

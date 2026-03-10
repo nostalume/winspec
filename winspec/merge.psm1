@@ -1,5 +1,6 @@
 # merge.psm1 - Merge functionality for bidirectional sync
 # Provides merge strategies and conflict resolution for WinSpec configurations
+# Implements the 'merge' command as part of Git-like workflow
 
 # Import dependent modules
 Import-Module (Join-Path $PSScriptRoot "logging.psm1") -Force
@@ -12,51 +13,72 @@ function Merge-Configuration {
     .DESCRIPTION
         Performs a three-way merge between base, incoming configurations using
         specified merge strategy. Supports interactive and non-interactive modes.
-    .PARAMETER BasePath
+        Implements the 'merge' command for Git-like workflow.
+    .PARAMETER Base
         Path to the base configuration file.
-    .PARAMETER IncomingPath
+    .PARAMETER Incoming
         Path to the incoming configuration file.
-    .PARAMETER OutputPath
+    .PARAMETER Output
         Path to write the merged configuration.
     .PARAMETER Strategy
         Merge strategy: auto, union, ours, theirs.
     .PARAMETER Interactive
         Enable interactive conflict resolution.
+    .PARAMETER DryRun
+        Preview merge without writing.
     .OUTPUTS
         Hashtable with merge results and conflicts.
     #>
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory = $true)]
-        [string]$BasePath,
-        
-        [Parameter(Mandatory = $true)]
-        [string]$IncomingPath,
+        [Parameter(Mandatory = $false)]
+        [string]$Base,
         
         [Parameter(Mandatory = $false)]
-        [string]$OutputPath,
+        [string]$Incoming,
+        
+        [Parameter(Mandatory = $false)]
+        [string]$Output,
         
         [Parameter(Mandatory = $false)]
         [ValidateSet("auto", "union", "ours", "theirs")]
         [string]$Strategy = "auto",
         
         [Parameter(Mandatory = $false)]
-        [switch]$Interactive
+        [switch]$Interactive,
+        
+        [Parameter(Mandatory = $false)]
+        [switch]$DryRun
     )
     
     Write-Log -Level "INFO" -Message "Starting configuration merge..."
-    Write-Log -Level "INFO" -Message "Base: $BasePath"
-    Write-Log -Level "INFO" -Message "Incoming: $IncomingPath"
+    
+    # Resolve paths using common function
+    $basePath = if ($Base) { Resolve-SpecPath -Spec $Base } else { $null }
+    $incomingPath = if ($Incoming) { Resolve-SpecPath -Spec $Incoming } else { $null }
+    
+    if (-not $basePath -or -not (Test-Path $basePath)) {
+        Write-Log -Level "ERROR" -Message "Base configuration not found: $Base"
+        return $null
+    }
+    
+    if (-not $incomingPath -or -not (Test-Path $incomingPath)) {
+        Write-Log -Level "ERROR" -Message "Incoming configuration not found: $Incoming"
+        return $null
+    }
+    
+    Write-Log -Level "INFO" -Message "Base: $basePath"
+    Write-Log -Level "INFO" -Message "Incoming: $incomingPath"
     Write-Log -Level "INFO" -Message "Strategy: $Strategy"
     
     # Load configurations using shared utility
-    $baseConfig = Import-Configuration -Path $BasePath
+    $baseConfig = Import-Configuration -Path $basePath
     if (-not $baseConfig) {
         Write-Log -Level "ERROR" -Message "Failed to load base configuration"
         return $null
     }
     
-    $incomingConfig = Import-Configuration -Path $IncomingPath
+    $incomingConfig = Import-Configuration -Path $incomingPath
     if (-not $incomingConfig) {
         Write-Log -Level "ERROR" -Message "Failed to load incoming configuration"
         return $null
@@ -67,8 +89,13 @@ function Merge-Configuration {
     
     if ($mergeResult.Success) {
         # Write output if specified
-        if ($OutputPath) {
-            $null = Save-Configuration -Config $mergeResult.Merged -Path $OutputPath
+        if ($Output) {
+            if ($DryRun) {
+                Write-Log -Level "INFO" -Message "[DryRun] Would save merged config to: $Output"
+            }
+            else {
+                $null = Save-Configuration -Config $mergeResult.Merged -Path $Output
+            }
         }
         
         Write-Log -Level "OK" -Message "Merge completed successfully"
@@ -103,12 +130,12 @@ function Invoke-MergeEngine {
     )
     
     $result = @{
-        Success = $true
-        Merged = @{}
-        Conflicts = @()
+        Success           = $true
+        Merged            = @{}
+        Conflicts         = @()
         ResolvedConflicts = 0
-        AutoMerged = 0
-        Path = ""
+        AutoMerged        = 0
+        Path              = ""
     }
     
     # Get all unique keys from both configurations
@@ -160,20 +187,20 @@ function Resolve-MergeItem {
     )
     
     $result = @{
-        Conflict = $false
-        Resolved = $false
-        Value = $null
+        Conflict     = $false
+        Resolved     = $false
+        Value        = $null
         ConflictInfo = $null
     }
     
     # Case 1: Key only in base (not in incoming)
-    if ($IncomingValue -eq $null -and $BaseValue -ne $null) {
+    if (-not $IncomingValue -and $BaseValue) {
         $result.Value = $BaseValue
         return $result
     }
     
     # Case 2: Key only in incoming (not in base)
-    if ($BaseValue -eq $null -and $IncomingValue -ne $null) {
+    if (-not $BaseValue -and $IncomingValue) {
         $result.Value = $IncomingValue
         $result.Resolved = $true
         return $result
@@ -231,10 +258,10 @@ function Resolve-MergeItem {
     else {
         # Non-interactive: record conflict
         $result.ConflictInfo = @{
-            Path = $Path
-            BaseValue = $BaseValue
+            Path          = $Path
+            BaseValue     = $BaseValue
             IncomingValue = $IncomingValue
-            Strategy = $Strategy
+            Strategy      = $Strategy
         }
     }
     
@@ -255,7 +282,7 @@ function Resolve-ByStrategy {
     
     $result = @{
         Success = $false
-        Value = $null
+        Value   = $null
     }
     
     switch ($Strategy) {

@@ -29,13 +29,13 @@ Managing Windows configuration has traditionally been fragmented across multiple
 
 ### WinSpec in Daily Use
 
-WinSpec simplifies your Windows workflow with these common scenarios:
+WinSpec simplifies your Windows workflow with Git-like commands:
 
 | Daily Task | WinSpec Solution |
 |------------|------------------|
-| **Set up a new PC** | Capture your configured system with `init`, apply to new machines |
-| **Keep config in sync** | Use `sync` to bidirectionally sync system state with your config file |
-| **Apply your setup** | Run `apply` to apply your declarative config (safe, idempotent) |
+| **Set up a new PC** | Capture your configured system with `pull`, push to new machines |
+| **Keep config in sync** | Use `pull` to capture system state, then `push` to apply |
+| **Apply your setup** | Run `push` to apply your declarative config (safe, idempotent) |
 | **Check differences** | Use `diff` to see what's changed between system and your config |
 | **Backup before changes** | Use `-Checkpoint` to create restore points before applying |
 | **Rollback if needed** | Use `rollback` to restore to a previous checkpoint |
@@ -116,32 +116,32 @@ scoop update winspec
 
 ### Quick Start
 
-**Step 1: Initialize your configuration**
+**Step 1: Pull system state to config**
 
 Capture your current system setup (or start fresh):
 
 ```powershell
-# Initialize from current system state (saves to ~/.config/winspec/.winspec.ps1)
-.\winspec\winspec.ps1 init
+# Pull current system state to default location (~/.config/winspec/.winspec.ps1)
+.\winspec\winspec.ps1 pull
 
-# Or initialize with template and comments
-.\winspec\winspec.ps1 init -Template -Output my-config.ps1
+# Or pull to specific file with template and comments
+.\winspec\winspec.ps1 pull -Output my-config.ps1 -Template
 
 # Interactive mode - choose what to include
-.\winspec\winspec.ps1 init -Interactive
+.\winspec\winspec.ps1 pull -Interactive
 ```
 
-**Step 2: Apply your configuration**
+**Step 2: Push configuration to system**
 
 ```powershell
-# Apply a specification (declarative only, safe)
-.\winspec\winspec.ps1 apply -Spec .\myconfig.ps1
+# Push a specification to system (declarative only, safe)
+.\winspec\winspec.ps1 push -Spec .\myconfig.ps1
 
 # Dry run (preview changes without applying)
-.\winspec\winspec.ps1 apply -Spec .\myconfig.ps1 -DryRun
+.\winspec\winspec.ps1 push -Spec .\myconfig.ps1 -DryRun
 
-# Apply with checkpoint (create restore point first)
-.\winspec\winspec.ps1 apply -Spec .\myconfig.ps1 -Checkpoint
+# Push with checkpoint (create restore point first)
+.\winspec\winspec.ps1 push -Spec .\myconfig.ps1 -Checkpoint
 
 # Show current system state
 .\winspec\winspec.ps1 status
@@ -153,8 +153,8 @@ Capture your current system setup (or start fresh):
 # See what's different between system and your config
 .\winspec\winspec.ps1 diff -Spec .\myconfig.ps1
 
-# Interactive sync - update config from system or vice versa
-.\winspec\winspec.ps1 sync -Spec .\myconfig.ps1 -SyncInteractive
+# Pull updated system state (capture new changes)
+.\winspec\winspec.ps1 pull -Output my-updated-config.ps1
 
 # If something goes wrong, rollback
 .\winspec\winspec.ps1 rollback -Last
@@ -163,20 +163,22 @@ Capture your current system setup (or start fresh):
 ### CLI Commands
 
  | Command | Description |
-|---------|-------------|
-| `apply` | Apply a specification file |
-| `init` | Initialize a new configuration from system state |
-| `trigger` | Execute a specific trigger |
-| `status` | Show current system state |
-| `rollback` | Rollback to a checkpoint |
-| `providers` | List available providers |
-| `validate` | Validate a spec without applying |
-| `export` | Export current system state to a config file |
-| `diff` | Compare system state with a spec |
-| `merge` | Merge two specification files |
-| `sync` | Interactive sync between system and config |
-| `sandbox` | Test changes in a sandbox environment |
-| `help` | Show help message |
+ |---------|-------------|
+ | **pull** | Pull system state to config file (Git-like, primary) |
+ | **push** | Push config to system (Git-like, primary) |
+ | **diff** | Compare system state with a spec |
+ | **merge** | Merge two specification files |
+ | **status** | Show current system state |
+ | `apply` | Apply a specification file (legacy alias for push) |
+ | `init` | Initialize a new configuration (legacy alias for pull) |
+ | `trigger` | Execute a specific trigger |
+ | `export` | Export current system state (legacy alias for pull) |
+ | `sync` | Interactive sync (legacy - use pull + push instead) |
+ | `rollback` | Rollback to a checkpoint |
+ | `providers` | List available providers |
+ | `validate` | Validate a spec without applying |
+ | `sandbox` | Test changes in a sandbox environment |
+ | `help` | Show help message |
 
 ### CLI Options
 
@@ -253,28 +255,25 @@ Capture your current system setup (or start fresh):
 
 ```powershell
 # === New Machine Setup ===
-# 1. On your configured machine: export current state
-.\winspec\winspec.ps1 export -Output my-setup.ps1
+# 1. On your configured machine: pull current system state
+.\winspec\winspec.ps1 pull -Output my-setup.ps1
 
-# 2. On new machine: apply the configuration
-.\winspec\winspec.ps1 apply -Spec .\my-setup.ps1
+# 2. On new machine: push the configuration
+.\winspec\winspec.ps1 push -Spec .\my-setup.ps1
 
 # === Regular Maintenance ===
 # Check if system matches your config
 .\winspec\winspec.ps1 diff -Spec .\myconfig.ps1
 
-# Sync changes (interactive - choose what to keep)
-.\winspec\winspec.ps1 sync -Spec .\myconfig.ps1 -SyncInteractive
-
-# Export current system state (capture new changes)
-.\winspec\winspec.ps1 export -Output my-updated-config.ps1
+# Pull updated system state (capture new changes)
+.\winspec\winspec.ps1 pull -Output my-updated-config.ps1
 
 # === Applying Changes ===
-# Apply with checkpoint (safe - creates restore point first)
-.\winspec\winspec.ps1 apply -Spec .\myconfig.ps1 -Checkpoint
+# Push with checkpoint (safe - creates restore point first)
+.\winspec\winspec.ps1 push -Spec .\myconfig.ps1 -Checkpoint
 
 # Dry run - see what would change
-.\winspec\winspec.ps1 apply -Spec .\myconfig.ps1 -DryRun
+.\winspec\winspec.ps1 push -Spec .\myconfig.ps1 -DryRun
 
 # If something goes wrong
 .\winspec\winspec.ps1 rollback -Last

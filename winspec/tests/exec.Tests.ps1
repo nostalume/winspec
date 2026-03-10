@@ -1,4 +1,4 @@
-# tests/core.Tests.ps1 - Tests for core module with mocked system operations
+# tests/exec.Tests.ps1 - Tests for exec.psm1 module
 
 BeforeAll {
     # Import modules
@@ -62,8 +62,8 @@ BeforeAll {
     Mock Get-ComputerRestorePoint { return @() }
     Mock Restore-Computer { }
     
-    # Now import core module which depends on mocked functions
-    Import-Module "$PSScriptRoot\..\core.psm1" -Force
+    # Now import exec module which depends on mocked functions
+    Import-Module "$PSScriptRoot\..\exec.psm1" -Force
 }
 
 Describe "Import-Spec" {
@@ -170,6 +170,12 @@ Describe "Resolve-Spec" {
 }
 
 Describe "Test-SpecSchema" {
+    BeforeAll {
+        # Import required modules in test scope for InModuleScope
+        Import-Module "$PSScriptRoot\..\logging.psm1" -Force
+        Import-Module "$PSScriptRoot\..\schema.psm1" -Force
+    }
+    
     It "Should validate correct specification" {
         InModuleScope schema {
             $config = @{

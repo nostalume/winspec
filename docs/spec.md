@@ -277,17 +277,19 @@ Custom path: `@{ Name = "trigger"; Path = ".\triggers\custom.ps1" }`
 
 | Command | Description |
 |---------|-------------|
-| `apply` | Apply a specification file |
-| `init` | Initialize a new configuration from system state |
+| **pull** | Pull system state to config file (Git-like) |
+| **push** | Push config to system (Git-like) |
+| **diff** | Compare system state with a spec |
+| **merge** | Merge two specification files |
+| **status** | Show current system state |
+| `apply` | Apply a specification file (legacy alias for push) |
+| `init` | Initialize a new configuration from system state (legacy alias for pull) |
 | `trigger` | Execute a specific trigger |
-| `status` | Show current system state |
+| `export` | Export current system state (legacy alias for pull) |
+| `sync` | Interactive sync (legacy, use pull + push instead) |
 | `rollback` | Rollback to a checkpoint |
 | `providers` | List available providers |
 | `validate` | Validate a spec without applying |
-| `export` | Export current system state to a config file |
-| `diff` | Compare system state with a spec |
-| `merge` | Merge two specification files |
-| `sync` | Interactive sync between system and config |
 | `sandbox` | Test changes in a sandbox environment |
 | `help` | Show help message |
 

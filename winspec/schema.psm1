@@ -2,7 +2,7 @@
 
 # Import dependent modules
 Import-Module (Join-Path $PSScriptRoot "logging.psm1") -Global
-Import-Module (Join-Path $PSScriptRoot "registry-maps.ps1") -Global
+Import-Module (Join-Path $PSScriptRoot "registry-maps.psm1") -Global
 
 # Provider type enumeration
 enum ProviderType {
@@ -105,10 +105,15 @@ function Test-SpecSchema {
     }
     
     if ($errors.Count -gt 0) {
-        Write-Log -Level "ERROR" -Message "Specification validation failed:"
-        foreach ($err in $errors) {
-            Write-Log -Level "ERROR" -Message "  - $err"
-        }
+        # Try to log errors, but continue if logging is not available
+        try {
+            if (Get-Command Write-Log -ErrorAction SilentlyContinue) {
+                Write-Log -Level "ERROR" -Message "Specification validation failed:"
+                foreach ($err in $errors) {
+                    Write-Log -Level "ERROR" -Message "  - $err"
+                }
+            }
+        } catch { }
         return $false
     }
     

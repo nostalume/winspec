@@ -411,11 +411,11 @@ function Test-ValuesEqual {
     #>
     param($Value1, $Value2)
     
-    if ($Value1 -eq $null -and $Value2 -eq $null) {
+    if (-not $Value1 -and -not $Value2) {
         return $true
     }
     
-    if ($Value1 -eq $null -or $Value2 -eq $null) {
+    if (-not $Value1 -or -not $Value2) {
         return $false
     }
     
@@ -514,10 +514,150 @@ function Merge-Hashtables {
 }
 
 # =============================================================================
+# PATH RESOLUTION - Config/spec path resolution utilities
+# =============================================================================
+
+$DefaultConfigFilename = ".winspec.ps1"
+$UserConfigDir = Join-Path $env:USERPROFILE ".config\winspec"
+
+function Resolve-ConfigPath {
+    <#
+    .SYNOPSIS
+        Resolves the output path for config operations.
+    .DESCRIPTION
+        Determines where to save config files. Priority:
+        1. Explicit OutputPath parameter
+        2. WINSPEC_CONFIG environment variable
+        3. User config directory (~/.config/winspec/)
+        4. Current directory
+    .PARAMETER OutputPath
+        Explicit output path if provided.
+    .OUTPUTS
+        Resolved path string.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $false)]
+        [string]$OutputPath
+    )
+    
+    # If explicit path provided and not empty, use it
+    if (-not [string]::IsNullOrWhiteSpace($OutputPath)) {
+        return $OutputPath
+    }
+    
+    # Check environment variable
+    if ($env:WINSPEC_CONFIG) {
+        $configPath = $env:WINSPEC_CONFIG
+        if (Test-Path $configPath -PathType Container) {
+            return Join-Path $configPath $DefaultConfigFilename
+        }
+        if ([System.IO.Path]::HasExtension($configPath)) {
+            return $configPath
+        }
+        return Join-Path $configPath $DefaultConfigFilename
+    }
+    
+    # Use user config directory (create if needed)
+    if (-not (Test-Path $UserConfigDir)) {
+        try {
+            New-Item -ItemType Directory -Path $UserConfigDir -Force | Out-Null
+        }
+        catch {
+            Write-Log -Level "WARN" -Message "Cannot create user config directory. Using current directory."
+            return Join-Path (Get-Location) $DefaultConfigFilename
+        }
+    }
+    
+    return Join-Path $UserConfigDir $DefaultConfigFilename
+}
+
+function Resolve-SpecPath {
+    <#
+    .SYNOPSIS
+        Resolves the spec/config file path for operations.
+    .DESCRIPTION
+        Auto-resolves spec path: explicit > config env var > default.
+    .PARAMETER Spec
+        Explicit spec path.
+    .PARAMETER ConfigPath
+        Optional config directory path.
+    .OUTPUTS
+        Resolved spec path string.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $false)]
+        [string]$Spec,
+        
+        [Parameter(Mandatory = $false)]
+        [string]$ConfigPath
+    )
+    
+    # If explicit spec provided, use it
+    if (-not [string]::IsNullOrWhiteSpace($Spec)) {
+        if (Test-Path $Spec) {
+            return $Spec
+        }
+        # Try as relative path
+        $fullPath = Join-Path (Get-Location) $Spec
+        if (Test-Path $fullPath) {
+            return $fullPath
+        }
+        Write-Log -Level "ERROR" -Message "Spec file not found: $Spec"
+        return $null
+    }
+    
+    # Check WINSPEC_CONFIG environment variable
+    if ($env:WINSPEC_CONFIG) {
+        $configPath = $env:WINSPEC_CONFIG
+        if (Test-Path $configPath -PathType Container) {
+            $specPath = Join-Path $configPath $DefaultConfigFilename
+            if (Test-Path $specPath) {
+                return $specPath
+            }
+        }
+        elseif ([System.IO.Path]::HasExtension($configPath) -and (Test-Path $configPath)) {
+            return $configPath
+        }
+    }
+    
+    # Use ConfigPath if provided
+    if (-not [string]::IsNullOrWhiteSpace($ConfigPath)) {
+        if (Test-Path $ConfigPath -PathType Container) {
+            $specPath = Join-Path $ConfigPath $DefaultConfigFilename
+            if (Test-Path $specPath) {
+                return $specPath
+            }
+        }
+        elseif (Test-Path $ConfigPath) {
+            return $ConfigPath
+        }
+    }
+    
+    # Fall back to user config directory
+    $userSpecPath = Join-Path $UserConfigDir $DefaultConfigFilename
+    if (Test-Path $userSpecPath) {
+        return $userSpecPath
+    }
+    
+    # Fall back to current directory
+    $currentSpecPath = Join-Path (Get-Location) $DefaultConfigFilename
+    if (Test-Path $currentSpecPath) {
+        return $currentSpecPath
+    }
+    
+    Write-Log -Level "ERROR" -Message "No spec file found. Use -Spec to specify a config file."
+    return $null
+}
+
+# =============================================================================
 # EXPORT
 # =============================================================================
 
 Export-ModuleMember -Function @(
+    "Resolve-ConfigPath"
+    "Resolve-SpecPath"
     "ConvertTo-DisplayValue"
     "ConvertTo-DetailedDisplayValue"
     "ConvertTo-HashtableString"

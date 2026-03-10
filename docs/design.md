@@ -27,27 +27,57 @@
 ```
 winspec/
 ├── winspec.ps1           # CLI entry point
-├── core.psm1             # Engine: resolve, plan, execute
+├── exec.psm1             # Engine (renamed from core): resolve, plan, execute
 ├── checkpoint.psm1       # Restore point management
 ├── logging.psm1          # Unified logging
 ├── schema.psm1           # Type definitions and validation
-├── registry-maps.ps1     # Registry configuration maps
-│
+├── registry-maps.psm1    # Registry configuration maps
+
+├── pull.psm1             # NEW: pull command (replaces export + init)
+├── push.psm1             # NEW: push command (replaces apply wrapper)
+├── diff.psm1             # Compare states
+├── merge.psm1            # Merge configs
+
 ├── managers/             # Declarative providers (idempotent)
 │   ├── registry.psm1     # Registry operations
 │   ├── service.psm1      # Windows services
 │   ├── feature.psm1      # Windows features
 │   └── package.psm1      # Package management (Scoop)
-│
+
 ├── triggers/             # Trigger providers (non-idempotent)
 │   ├── activation.psm1   # Windows/Office activation
 │   ├── debloat.psm1      # System debloating
 │   └── office.psm1       # Office deployment
-│
+
 └── tests/                # Test suite
     ├── *.Tests.ps1       # Pester test files
     └── run-tests.ps1     # Test runner
 ```
+
+---
+
+## Module Architecture
+
+### Core Modules
+
+| Module | Purpose |
+|--------|---------|
+| **exec.psm1** | Execution engine - spec resolution, provider execution, trigger execution |
+| **pull.psm1** | Pull system state to config (combines export + init) |
+| **push.psm1** | Push config to system (replaces apply) |
+| **diff.psm1** | Compare system state with config |
+| **merge.psm1** | Merge two configuration files |
+
+### Common Modules
+
+| Module | Purpose |
+|--------|---------|
+| **utils.psm1** | Value formatting, hashtable ops, config file I/O, path resolution |
+| **state.psm1** | Provider discovery, system state capture, state comparison |
+| **logging.psm1** | Unified logging functions |
+| **schema.psm1** | Specification validation |
+| **checkpoint.psm1** | System restore point management |
+| **sandbox.psm1** | Sandbox execution for testing |
 
 ---
 
@@ -95,124 +125,54 @@ Engine: Execute action → Report result
 
 ---
 
-## PowerShell-Native Configuration
+## CLI Interface (Git-like Commands)
 
-### Specification Format
+WinSpec uses Git-like commands for state manipulation:
 
 ```powershell
-# example.ps1
-@{
-    Name = "developer"
-    Description = "Developer workstation setup"
-    
-    # Import other specs (composition)
-    Import = @(
-        ".\base-config.ps1"
-    )
-    
-    # === DECLARATIVE PROVIDERS (Idempotent) ===
-    
-    # Registry settings
-    Registry = @{
-        Clipboard = @{
-            EnableHistory = $true
-        }
-        Explorer = @{
-            ShowHidden = $true
-            ShowFileExt = $true
-        }
-        Theme = @{
-            AppTheme = "dark"
-            SystemTheme = "dark"
-        }
-        Desktop = @{
-            MenuShowDelay = "0"
-        }
-    }
-    
-    # Package management
-    Package = @{
-        Installed = @("git", "neovim", "nodejs", "python")
-    }
-    
-    # Windows Services
-    Service = @{
-        wuauserv = @{ State = "stopped"; Startup = "disabled" }
-    }
-    
-    # Windows Features
-    Feature = @{
-        "Microsoft-Windows-Subsystem-Linux" = "enabled"
-        "VirtualMachinePlatform" = "enabled"
-    }
-    
-    # === TRIGGERS (Non-Idempotent) ===
-    Trigger = @(
-        @{ Name = "Activation" }
-        @{ Name = "Debloat"; Value = "silent" }
-        @{ Name = "Office"; Value = "C:\Installers" }
-    )
-}
+# Pull: Export system state to config file
+winspec pull                          # Pull to default location
+winspec pull -Output config.ps1      # Pull to specific file
+winspec pull -Providers Registry,Service  # Pull specific providers
+winspec pull -DryRun                 # Preview what would be pulled
+
+# Push: Apply config to system
+winspec push -Spec config.ps1        # Push config to system
+winspec push -Spec config.ps1 -DryRun   # Preview changes
+winspec push -Spec config.ps1 -Checkpoint  # Create restore point
+winspec push -Spec config.ps1 -WithTriggers # Include triggers
+
+# Diff: Compare system vs config
+winspec diff -Spec config.ps1        # Compare against live system
+winspec diff -Spec config.ps1 -Against other.ps1  # Compare two configs
+winspec diff -Spec config.ps1 -Providers Registry  # Diff specific providers
+
+# Merge: Merge two configs
+winspec merge -Base base.ps1 -Incoming incoming.ps1
+winspec merge -Base base.ps1 -Incoming incoming.ps1 -Output merged.ps1
+winspec merge -Base base.ps1 -Incoming incoming.ps1 -Strategy ours
+winspec merge -Base base.ps1 -Incoming incoming.ps1 -Interactive
+
+# Status: Show current state
+winspec status
+winspec status -Providers Registry,Service
+
+# Apply (legacy alias for push)
+winspec apply -Spec config.ps1
+
+# Export (legacy alias for pull)
+winspec export -Output config.ps1
+
+# Init (legacy alias for pull)
+winspec init
+
+# Sync (legacy - use pull + push instead)
+winspec sync -Spec config.ps1
 ```
 
 ---
 
-## CLI Interface
-
-```powershell
-# Apply a specification (declarative only, no triggers)
-.\winspec.ps1 apply -Spec .\config.ps1
-
-# Apply with triggers (runs everything)
-.\winspec.ps1 apply -Spec .\config.ps1 -WithTriggers
-
-# Apply specific trigger
-.\winspec.ps1 trigger "activation"
-.\winspec.ps1 trigger @{ debloat = "silent" }
-
-# Dry run (preview changes)
-.\winspec.ps1 apply -Spec .\config.ps1 -DryRun
-
-# Apply with checkpoint
-.\winspec.ps1 apply -Spec .\config.ps1 -Checkpoint
-
-# Initialize configuration from current system state
-.\winspec.ps1 init
-.\winspec.ps1 init -Output .\config.ps1 -Template
-
-# Export current system state
-.\winspec.ps1 export -Output .\config.ps1
-.\winspec.ps1 export -Output .\config.json -Format json
-
-# Compare system state with spec
-.\winspec.ps1 diff -Spec .\config.ps1
-
-# Merge two specifications
-.\winspec.ps1 merge -Base base.ps1 -Incoming custom.ps1 -Output merged.ps1
-
-# Interactive sync between system and config
-.\winspec.ps1 sync -Spec .\config.ps1 -SyncInteractive
-
-# Sandbox testing
-.\winspec.ps1 apply -Spec .\config.ps1 -Sandbox
-
-# Show current system state
-.\winspec.ps1 status
-
-# Rollback to checkpoint
-.\winspec.ps1 rollback -Last
-.\winspec.ps1 rollback -SequenceNumber 100
-
-# List available providers
-.\winspec.ps1 providers
-
-# Validate a spec without applying
-.\winspec.ps1 validate -Spec .\config.ps1
-```
-
----
-
-## Core Module Functions
+## Core Module Functions (exec.psm1)
 
 ### Main Entry Point
 
@@ -220,7 +180,7 @@ Engine: Execute action → Report result
 function Invoke-WinSpec {
     param(
         [string]$Spec,
-        [switch]$DryRun,
+        [switch]$DryRun,      # Now uses ShouldProcess internally
         [switch]$Checkpoint,
         [switch]$WithTriggers
     )
@@ -238,30 +198,22 @@ function Invoke-WinSpec {
 
 | Function | Purpose |
 |----------|---------|
-| `Import-Spec` | Load and parse a specification file |
 | `Resolve-Spec` | Resolve imports and merge configurations |
-| `Merge-Hashtables` | Recursively merge nested hashtables |
-| `Test-SpecSchema` | Validate specification against schema |
-| `Import-Manager` | Load a declarative provider module |
 | `Invoke-DeclarativeProviders` | Execute all declarative providers |
 | `Invoke-Triggers` | Execute trigger providers |
-| `Find-TriggerScript` | Locate trigger scripts in various paths |
-| `Invoke-CustomTrigger` | Execute custom trigger scripts |
-| `Import-BuiltInTrigger` | Load built-in trigger modules |
-| `Write-Report` | Generate execution report |
+| `Get-SystemStatus` | Get current system status |
+| `Get-DiscoveredProviders` | Discover available providers |
 
-### Configuration Resolution
+---
 
-```powershell
-function Resolve-ConfigLocation {
-    param([string]$ConfigPath, [string]$SpecPath)
-    # Resolution order:
-    # 1. Explicit ConfigPath argument
-    # 2. WINSPEC_CONFIG environment variable
-    # 3. ~/.config/winspec/ directory
-    # 4. .winspec.ps1 in current directory
-}
-```
+## Path Resolution
+
+WinSpec resolves paths in this priority order:
+
+1. Explicit `-Spec` or `-Output` argument
+2. `$env:WINSPEC_CONFIG` environment variable
+3. `~/.config/winspec/` directory
+4. `.winspec.ps1` in current directory
 
 ---
 
@@ -283,60 +235,13 @@ function Test-CheckpointCapability { }
 Create a checkpoint before applying changes:
 
 ```powershell
-.\winspec.ps1 apply -Spec .\config.ps1 -Checkpoint
+winspec push -Spec config.ps1 -Checkpoint
 ```
 
 Rollback if something goes wrong:
 
 ```powershell
-.\winspec.ps1 rollback -Last
-```
-
----
-
-## Registry Maps
-
-Registry configuration is defined in `registry-maps.ps1`:
-
-```powershell
-$Script:RegistryMaps = @{
-    Clipboard = @{
-        Path = "HKCU:\Software\Microsoft\Clipboard"
-        Properties = @{
-            EnableHistory = @{
-                Name = "EnableClipboardHistory"
-                Type = "DWord"
-            }
-        }
-    }
-    
-    Explorer = @{
-        Path = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"
-        Properties = @{
-            ShowHidden = @{
-                Name = "Hidden"
-                Type = "DWord"
-                Map = @{ $true = 1; $false = 2 }
-            }
-            ShowFileExt = @{
-                Name = "HideFileExt"
-                Type = "DWord"
-                Map = @{ $true = 0; $false = 1 }
-            }
-        }
-    }
-    
-    Theme = @{
-        Path = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"
-        Properties = @{
-            AppTheme = @{
-                Name = "AppsUseLightTheme"
-                Type = "DWord"
-                Map = @{ "light" = 1; "dark" = 0 }
-            }
-        }
-    }
-}
+winspec rollback -Last
 ```
 
 ---
@@ -425,31 +330,50 @@ Invoke-Pester winspec/tests
 │                    (winspec.ps1)                             │
 └─────────────────────┬───────────────────────────────────────┘
                       │
-                      ▼
-┌─────────────────────────────────────────────────────────────┐
-│                      Core Engine                             │
-│                     (core.psm1)                              │
-├─────────────────────────────────────────────────────────────┤
-│  Import-Spec  →  Resolve-Spec  →  Test-SpecSchema  →  Execute  │
-│      │                │              │            │          │
-│      ▼                ▼              ▼            ▼          │
-│  Parse .ps1      Merge imports   Validate    Run providers   │
-└─────────────────────┬───────────────────────────────────────┘
-                      │
-          ┌───────────┴───────────┐
-          │                       │
-          ▼                       ▼
-┌─────────────────────┐   ┌─────────────────────┐
-│  Declarative        │   │  Triggers           │
-│  (managers/)        │   │  (triggers/)        │
-├─────────────────────┤   ├─────────────────────┤
-│ • Registry          │   │ • Activation        │
-│ • Service           │   │ • Debloat           │
-│ • Feature           │   │ • Office            │
-│ • Package           │   │                     │
-└─────────────────────┘   └─────────────────────┘
+        ┌─────────────┼─────────────┐
+        ▼             ▼             ▼
+    ┌────────┐   ┌────────┐   ┌──────────┐
+    │ pull   │   │ push   │   │ diff     │
+    └────┬───┘   └────┬───┘   └────┬─────┘
+         │           │            │
+         ▼           ▼            ▼
+    ┌─────────────────────────────────────────────────────────┐
+    │                      Core Engine                       │
+    │                     (exec.psm1)                        │
+    ├─────────────────────────────────────────────────────────┤
+    │  Resolve-Spec  →  Validate  →  Execute                  │
+    │      │               │            │                     │
+    │      ▼               ▼            ▼                     │
+    │  Import/Merge   Validate     Run providers            │
+    └─────────────────────┬───────────────────────────────────┘
+                          │
+          ┌───────────────┼───────────────┐
+          ▼               ▼               ▼
+    ┌────────────┐  ┌────────────┐  ┌────────────┐
+    │ Declarative│  │  Triggers  │  │   State    │
+    │(managers/) │  │(triggers/) │  │(state.psm1)│
+    ├────────────┤  ├────────────┤  ├────────────┤
+    │ • Registry │  │ • Activ.   │  │ • Capture  │
+    │ • Service │  │ • Debloat  │  │ • Compare  │
+    │ • Feature │  │ • Office   │  │            │
+    │ • Package │  │            │  │            │
+    └────────────┘  └────────────┘  └────────────┘
 ```
 
 ---
 
-*WinSpec Design Document v2.0*
+## Backward Compatibility
+
+The following legacy commands are supported as aliases:
+
+| Legacy Command | New Command | Notes |
+|---------------|-------------|-------|
+| `export` | `pull` | Export system state |
+| `init` | `pull` | Initialize config |
+| `apply` | `push` | Apply config to system |
+| `Export-SystemState` | `Invoke-Pull` | Module function |
+| `Apply-Configuration` | `Invoke-Push` | Module function |
+
+---
+
+*WinSpec Design Document v3.0 - Updated with Git-like commands*
