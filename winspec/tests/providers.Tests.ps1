@@ -241,13 +241,13 @@ Describe "Feature Provider" {
 Describe "Package Provider" {
     BeforeAll {
         # Import only the package module for this test block
-        Import-Module "$PSScriptRoot\..\managers\package.psm1" -Force
+        Import-Module "$PSScriptRoot\..\managers\scoop.psm1" -Force
     }
     
     Context "Get-ProviderInfo" {
         It "Should return correct provider info" {
             $info = Get-ProviderInfo
-            $info.Name | Should -Be "Package"
+            $info.Name | Should -Be "Scoop"
             $info.Type | Should -Be "Declarative"
         }
     }

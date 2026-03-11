@@ -197,13 +197,18 @@ function Invoke-DeclarativeProviders {
         Executes declarative providers to apply configuration.
     .PARAMETER Config
         The resolved configuration hashtable.
+    .PARAMETER Providers
+        Optional array of provider names to restrict to. If not provided, uses Config.Providers if present.
     .OUTPUTS
         Hashtable with results per provider.
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param (
         [Parameter(Mandatory = $true)]
-        [hashtable]$Config
+        [hashtable]$Config,
+        
+        [Parameter(Mandatory = $false)]
+        [string[]]$Providers = @()
     )
 
     $results = @{}
@@ -212,6 +217,12 @@ function Invoke-DeclarativeProviders {
     $managersPath = Join-Path $ModuleRoot "managers"
     $declarativeProviders = Get-DiscoveredProviders -Path $managersPath -Type "Declarative"
     
+    # Check if Providers field is specified in config to restrict providers
+    $restrictedProviders = $Providers
+    if ($Providers.Count -eq 0 -and $Config.ContainsKey('Providers') -and $Config.Providers -is [array]) {
+        $restrictedProviders = $Config.Providers
+    }
+    
     # Check sandbox mode
     $isSandbox = Test-SandboxActive
     $sandboxMode = if ($isSandbox) { Get-SandboxMode } else { "Live" }
@@ -219,6 +230,12 @@ function Invoke-DeclarativeProviders {
     foreach ($providerName in $declarativeProviders) {
         # Skip if provider not configured
         if ($null -eq $Config.$providerName) {
+            continue
+        }
+        
+        # Skip if Providers field restricts this provider
+        if ($restrictedProviders.Count -gt 0 -and $providerName -notin $restrictedProviders) {
+            Write-Log -Level "INFO" -Message "Skipping $providerName (not in specified Providers list)"
             continue
         }
 

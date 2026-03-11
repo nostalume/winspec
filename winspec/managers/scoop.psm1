@@ -1,11 +1,11 @@
-# providers/package.psm1 - Declarative package management provider
+# managers/scoop.psm1 - Declarative Scoop package management provider
 
 # Import dependent modules
 Import-Module (Join-Path $PSScriptRoot "..\logging.psm1") -Force
 
 function Get-ProviderInfo {
     return @{
-        Name = "Package"
+        Name = "Scoop"
         Type = "Declarative"
     }
 }
@@ -105,7 +105,7 @@ function Get-ScoopExport {
     }
 }
 
-function Get-InstalledPackages {
+function Get-InstalledScoopPackages {
     <#
     .SYNOPSIS
         Gets the list of installed package names.
@@ -119,7 +119,7 @@ function Get-InstalledPackages {
     return @($export.apps | Select-Object -ExpandProperty Name -ErrorAction SilentlyContinue)
 }
 
-function Get-PackageInfo {
+function Get-ScoopPackageInfo {
     <#
     .SYNOPSIS
         Gets detailed information about an installed package.
@@ -136,12 +136,57 @@ function Get-PackageInfo {
     return $export.apps | Where-Object { $_.Name -eq $PackageName }
 }
 
-function Test-PackageState {
+function Get-PackageName {
+    <#
+    .SYNOPSIS
+        Extracts package name from various input formats.
+    .DESCRIPTION
+        Handles both simple string format and extended hashtable format with flags.
+    .PARAMETER Package
+        Package name (string) or package object with Name and optional Flags
+    .OUTPUTS
+        Package name string
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        $Package
+    )
+    
+    if ($Package -is [hashtable]) {
+        return $Package.Name
+    }
+    return $Package
+}
+
+function Get-PackageFlags {
+    <#
+    .SYNOPSIS
+        Extracts installation flags from package object.
+    .DESCRIPTION
+        Returns flags string if package is hashtable with Flags property, otherwise empty string.
+    .PARAMETER Package
+        Package name (string) or package object with Name and optional Flags
+    .OUTPUTS
+        Flags string (may be empty)
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        $Package
+    )
+    
+    if ($Package -is [hashtable] -and $Package.Flags) {
+        return $Package.Flags
+    }
+    return ""
+}
+
+function Test-ScoopState {
     <#
     .SYNOPSIS
         Tests if all desired packages are installed.
     .DESCRIPTION
         Compares the desired package list against Scoop's exported state.
+        Supports both simple strings and extended hashtables with flags.
     #>
     [CmdletBinding()]
     param (
@@ -153,10 +198,11 @@ function Test-PackageState {
         return $true
     }
     
-    $installed = Get-InstalledPackages
+    $installed = Get-InstalledScoopPackages
     
     foreach ($package in $Desired.Installed) {
-        if ($package -notin $installed) {
+        $pkgName = Get-PackageName -Package $package
+        if ($pkgName -notin $installed) {
             return $false
         }
     }
@@ -164,14 +210,14 @@ function Test-PackageState {
     return $true
 }
 
-function Set-PackageState {
+function Set-ScoopState {
     <#
     .SYNOPSIS
         Installs packages that are not already present.
     .DESCRIPTION
         Uses Scoop export to determine current state and installs
-        only the packages that are missing. Requires Scoop to be
-        pre-installed.
+        only the packages that are missing. Supports per-package flags.
+        Requires Scoop to be pre-installed.
     #>
     [CmdletBinding(SupportsShouldProcess = $true)]
     param (
@@ -196,37 +242,45 @@ function Set-PackageState {
     }
     
     # Get current state once from scoop export
-    $installed = Get-InstalledPackages
+    $installed = Get-InstalledScoopPackages
     
     foreach ($package in $Desired.Installed) {
-        if ($package -in $installed) {
-            Write-LogOk -Name $package -DesiredValue "installed"
-            $results[$package] = @{ Status = "AlreadyInstalled" }
+        $pkgName = Get-PackageName -Package $package
+        $pkgFlags = Get-PackageFlags -Package $package
+        
+        if ($pkgName -in $installed) {
+            Write-LogOk -Name $pkgName -DesiredValue "installed"
+            $results[$pkgName] = @{ Status = "AlreadyInstalled" }
             continue
         }
         
-        Write-LogChange -Name $package -CurrentValue "not installed" -DesiredValue "installed"
+        Write-LogChange -Name $pkgName -CurrentValue "not installed" -DesiredValue "installed"
         
-        if ($PSCmdlet.ShouldProcess($package, "Install package")) {
+        if ($PSCmdlet.ShouldProcess($pkgName, "Install package")) {
             try {
-                Invoke-ScoopCommand -Command "install" -Arguments $package | Out-Null
-                Write-LogApplied -Name $package -DesiredValue "installed"
-                $results[$package] = @{ Status = "Installed" }
+                if ($pkgFlags) {
+                    Invoke-ScoopCommand -Command "install" -Arguments "$pkgFlags $pkgName" | Out-Null
+                }
+                else {
+                    Invoke-ScoopCommand -Command "install" -Arguments $pkgName | Out-Null
+                }
+                Write-LogApplied -Name $pkgName -DesiredValue "installed"
+                $results[$pkgName] = @{ Status = "Installed"; Flags = $pkgFlags }
             }
             catch {
-                Write-LogError -Name $package -Details $_.Exception.Message
-                $results[$package] = @{ Status = "Error"; Message = $_.Exception.Message }
+                Write-LogError -Name $pkgName -Details $_.Exception.Message
+                $results[$pkgName] = @{ Status = "Error"; Message = $_.Exception.Message }
             }
         }
         else {
-            $results[$package] = @{ Status = "DryRun" }
+            $results[$pkgName] = @{ Status = "DryRun" }
         }
     }
     
     return $results
 }
 
-function Export-PackageState {
+function Export-ScoopState {
     <#
     .SYNOPSIS
         Exports the current package state for bidirectional sync.
@@ -303,7 +357,7 @@ function Export-PackageState {
     return $result
 }
 
-function Compare-PackageState {
+function Compare-ScoopState {
     <#
     .SYNOPSIS
         Compares system package state with desired configuration.
@@ -311,7 +365,7 @@ function Compare-PackageState {
         Compares current Scoop state with a desired configuration and
         returns differences (added, removed, changed packages).
     .PARAMETER System
-        Current system state (from Export-PackageState)
+        Current system state (from Export-ScoopState)
     .PARAMETER Desired
         Desired configuration state
     .OUTPUTS
@@ -328,16 +382,21 @@ function Compare-PackageState {
     
     $differences = @()
     
-    # Get package lists
-    $systemPackages = if ($System.Installed) { $System.Installed } else { @() }
-    $desiredPackages = if ($Desired.Installed) { $Desired.Installed } else { @() }
+    # Get package lists (handle both simple and extended format)
+    $systemPackages = if ($System.Installed) { 
+        $System.Installed | ForEach-Object { Get-PackageName -Package $_ }
+    } else { @() }
+    
+    $desiredPackages = if ($Desired.Installed) { 
+        $Desired.Installed | ForEach-Object { Get-PackageName -Package $_ }
+    } else { @() }
     
     # Find added packages (in desired, not in system)
     foreach ($package in $desiredPackages) {
         if ($package -notin $systemPackages) {
             $differences += @{
                 Type = "Added"
-                Path = "Package.$package"
+                Path = "Scoop.$package"
                 SystemValue = $null
                 ConfigValue = $package
             }
@@ -349,7 +408,7 @@ function Compare-PackageState {
         if ($package -notin $desiredPackages) {
             $differences += @{
                 Type = "Removed"
-                Path = "Package.$package"
+                Path = "Scoop.$package"
                 SystemValue = $package
                 ConfigValue = $null
             }
@@ -367,7 +426,7 @@ function Compare-PackageState {
             if ($desiredApp.Version -and $systemApp.Version -ne $desiredApp.Version) {
                 $differences += @{
                     Type = "Changed"
-                    Path = "Package.$($desiredApp.Name)"
+                    Path = "Scoop.$($desiredApp.Name)"
                     SystemValue = @{ Version = $systemApp.Version }
                     ConfigValue = @{ Version = $desiredApp.Version }
                 }
@@ -375,7 +434,7 @@ function Compare-PackageState {
             else {
                 $differences += @{
                     Type = "Equal"
-                    Path = "Package.$($desiredApp.Name)"
+                    Path = "Scoop.$($desiredApp.Name)"
                     SystemValue = $systemApp
                     ConfigValue = $desiredApp
                 }
@@ -392,7 +451,7 @@ function Compare-PackageState {
         if (-not $systemBucket) {
             $differences += @{
                 Type = "Added"
-                Path = "Package.Buckets.$($bucket.Name)"
+                Path = "Scoop.Buckets.$($bucket.Name)"
                 SystemValue = $null
                 ConfigValue = $bucket
             }
@@ -402,7 +461,7 @@ function Compare-PackageState {
     return $differences
 }
 
-function Get-PackageMockState {
+function Get-ScoopMockState {
     <#
     .SYNOPSIS
         Gets the package mock state from sandbox.
@@ -417,7 +476,7 @@ function Get-PackageMockState {
     Import-Module (Join-Path $PSScriptRoot "..\sandbox.psm1") -Force -ErrorAction SilentlyContinue
     
     if (Test-SandboxActive) {
-        $state = Get-SandboxState -Provider "Package"
+        $state = Get-SandboxState -Provider "Scoop"
         return @{
             apps = $state.apps
             buckets = $state.buckets
@@ -431,7 +490,7 @@ function Get-PackageMockState {
     }
 }
 
-function Set-PackageMockState {
+function Set-ScoopMockState {
     <#
     .SYNOPSIS
         Sets the package mock state in sandbox.
@@ -449,11 +508,11 @@ function Set-PackageMockState {
     Import-Module (Join-Path $PSScriptRoot "..\sandbox.psm1") -Force -ErrorAction SilentlyContinue
     
     if (Test-SandboxActive) {
-        Set-SandboxState -Provider "Package" -State $State
+        Set-SandboxState -Provider "Scoop" -State $State
     }
 }
 
-function Invoke-PackageSandboxApply {
+function Invoke-ScoopSandboxApply {
     <#
     .SYNOPSIS
         Applies package state changes in sandbox mode.
@@ -476,9 +535,16 @@ function Invoke-PackageSandboxApply {
         throw "Not in sandbox mode"
     }
     
-    $currentState = Get-SandboxState -Provider "Package"
+    $currentState = Get-SandboxState -Provider "Scoop"
     $currentApps = @($currentState.apps | ForEach-Object { $_.name })
-    $desiredApps = @($Desired.Installed)
+    
+    # Handle both simple and extended format for Installed
+    $desiredApps = @()
+    if ($Desired.Installed) {
+        foreach ($pkg in $Desired.Installed) {
+            $desiredApps += Get-PackageName -Package $pkg
+        }
+    }
     
     $results = @{
         Status = "Success"
@@ -513,10 +579,10 @@ function Invoke-PackageSandboxApply {
     }
     
     # Update sandbox state
-    Set-SandboxState -Provider "Package" -State $currentState
+    Set-SandboxState -Provider "Scoop" -State $currentState
     
     # Record change
-    Add-SandboxChange -Provider "Package" -Change $results
+    Add-SandboxChange -Provider "Scoop" -Change $results
     
     return $results
 }
@@ -526,13 +592,15 @@ Export-ModuleMember -Function @(
     "Test-ScoopInstalled"
     "Invoke-ScoopCommand"
     "Get-ScoopExport"
-    "Get-InstalledPackages"
-    "Get-PackageInfo"
-    "Test-PackageState"
-    "Set-PackageState"
-    "Export-PackageState"
-    "Compare-PackageState"
-    "Get-PackageMockState"
-    "Set-PackageMockState"
-    "Invoke-PackageSandboxApply"
+    "Get-InstalledScoopPackages"
+    "Get-ScoopPackageInfo"
+    "Get-PackageName"
+    "Get-PackageFlags"
+    "Test-ScoopState"
+    "Set-ScoopState"
+    "Export-ScoopState"
+    "Compare-ScoopState"
+    "Get-ScoopMockState"
+    "Set-ScoopMockState"
+    "Invoke-ScoopSandboxApply"
 )

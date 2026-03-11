@@ -258,3 +258,43 @@ Describe "Import-BuiltInTrigger" {
         $result | Should -Be $false
     }
 }
+
+Describe "Provider Restriction" {
+    BeforeAll {
+        # Import scoop manager mock
+        Import-Module "$PSScriptRoot\..\managers\scoop.psm1" -Force
+        
+        # Mock winget command
+        Mock Get-Command { 
+            param($Name)
+            if ($Name -eq "winget") {
+                return @{ Name = "winget" }
+            }
+            return $null
+        } -ModuleName exec
+    }
+    
+    It "Should accept Providers parameter" {
+        { Invoke-DeclarativeProviders -Providers @("Scoop") } | Should -Not -Throw
+    }
+    
+    It "Should restrict to specified providers only" {
+        $config = @{
+            Name = "test"
+            Scoop = @{ Installed = @("git") }
+        }
+        
+        # Should only run Scoop, not Registry
+        { Invoke-DeclarativeProviders -Config $config -Providers @("Scoop") } | Should -Not -Throw
+    }
+    
+    It "Should allow multiple providers" {
+        $config = @{
+            Name = "test"
+            Scoop = @{ Installed = @("git") }
+            Registry = @{ Explorer = @{ ShowHidden = $true } }
+        }
+        
+        { Invoke-DeclarativeProviders -Config $config -Providers @("Scoop", "Registry") } | Should -Not -Throw
+    }
+}

@@ -268,7 +268,7 @@ USAGE:
 
 DESCRIPTION:
     Lists all available providers:
-    - Declarative (idempotent): Registry, Package, Service, Feature
+    - Declarative (idempotent): Registry, Scoop, Winget, Service, Feature
     - Trigger (non-idempotent): Activation, Debloat, Office
 
 OPTIONS:
@@ -325,7 +325,7 @@ EXAMPLES:
     winspec export
 
     # Export specific providers
-    winspec export -Providers Registry,Package
+    winspec export -Providers Registry,Scoop
 
     # Export as JSON
     winspec export -Format json -Output state.json
@@ -357,7 +357,7 @@ EXAMPLES:
     winspec pull
 
     # Pull specific providers
-    winspec pull -Providers Registry,Package
+    winspec pull -Providers Registry,Scoop
 
     # Pull as JSON
     winspec pull -Output state.json -Format json
@@ -517,7 +517,7 @@ EXAMPLES:
     winspec init -Interactive
 
     # Initialize specific providers
-    winspec init -Providers Package,Registry
+    winspec init -Providers Scoop,Registry
 
 "@
             }

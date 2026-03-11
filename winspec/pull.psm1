@@ -20,8 +20,10 @@ function Invoke-Pull {
         Combines functionality of export and init commands.
     .PARAMETER Output
         Path to write the configuration file.
+    .PARAMETER Spec
+        Path to existing spec file to read Providers field from.
     .PARAMETER Providers
-        Array of providers to include.
+        Array of providers to include. If not specified and Spec has Providers field, uses that.
     .PARAMETER Format
         Output format: ps1 or json.
     .PARAMETER Interactive
@@ -43,6 +45,9 @@ function Invoke-Pull {
     param(
         [Parameter(Mandatory = $false)]
         [string]$Output,
+        
+        [Parameter(Mandatory = $false)]
+        [string]$Spec,
         
         [Parameter(Mandatory = $false)]
         [string[]]$Providers = @(),
@@ -76,10 +81,33 @@ function Invoke-Pull {
         return $null
     }
     
+    # If Spec is provided, read Providers field from it
+    $specProviders = @()
+    if ($Spec) {
+        if (Test-Path $Spec) {
+            try {
+                $specContent = & $Spec
+                if ($specContent -is [hashtable] -and $specContent.ContainsKey('Providers')) {
+                    $specProviders = $specContent.Providers
+                    Write-Log -Level "INFO" -Message "Using Providers from spec: $($specProviders -join ', ')"
+                }
+            }
+            catch {
+                Write-Log -Level "WARN" -Message "Could not read spec file: $($_.Exception.Message)"
+            }
+        }
+    }
+    
+    # Use CLI Providers if provided, otherwise use spec Providers
+    $effectiveProviders = $Providers
+    if ($Providers.Count -eq 0 -and $specProviders.Count -gt 0) {
+        $effectiveProviders = $specProviders
+    }
+    
     Write-Log -Level "INFO" -Message "Capturing system state..."
     
     # Capture system state
-    $systemState = Get-SystemState -Providers $Providers
+    $systemState = Get-SystemState -Providers $effectiveProviders
     
     if (-not $systemState -or $systemState.Count -eq 0) {
         Write-Log -Level "WARN" -Message "No system state captured"

@@ -15,8 +15,10 @@ $Script:SpecSchema = @{
     Name        = @{ Type = "string"; Required = $false }
     Description = @{ Type = "string"; Required = $false }
     Import      = @{ Type = "array"; Required = $false }
+    Providers   = @{ Type = "array"; Required = $false }
     Registry    = @{ Type = "hashtable"; Required = $false }
-    Package     = @{ Type = "hashtable"; Required = $false }
+    Scoop       = @{ Type = "hashtable"; Required = $false }
+    Winget      = @{ Type = "hashtable"; Required = $false }
     Service     = @{ Type = "hashtable"; Required = $false }
     Feature     = @{ Type = "hashtable"; Required = $false }
     Trigger     = @{ Type = "array"; Required = $false }
@@ -54,10 +56,17 @@ function Test-SpecSchema {
         }
     }
     
-    # Validate Package structure
-    if ($Config.Package) {
-        if ($Config.Package.Installed -and -not ($Config.Package.Installed -is [array])) {
-            $errors += "Package.Installed must be an array"
+    # Validate Package/Scoop structure
+    if ($Config.Scoop) {
+        if ($Config.Scoop.Installed -and -not ($Config.Scoop.Installed -is [array])) {
+            $errors += "Scoop.Installed must be an array"
+        }
+    }
+    
+    # Validate Winget structure
+    if ($Config.Winget) {
+        if ($Config.Winget.Installed -and -not ($Config.Winget.Installed -is [array])) {
+            $errors += "Winget.Installed must be an array"
         }
     }
     

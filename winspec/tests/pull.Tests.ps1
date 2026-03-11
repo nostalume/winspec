@@ -18,7 +18,11 @@ Describe "Invoke-Pull" {
         }
         
         It "Should accept Providers parameter" {
-            { Invoke-Pull -Providers @("Package") -WhatIf } | Should -Not -Throw
+            { Invoke-Pull -Providers @("Scoop") -WhatIf } | Should -Not -Throw
+        }
+        
+        It "Should accept Spec parameter" {
+            { Invoke-Pull -Spec "test.ps1" -WhatIf } | Should -Not -Throw
         }
         
         It "Should accept Format parameter" {

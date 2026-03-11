@@ -15,11 +15,14 @@ $Script:SandboxContext = $null
 
 # Default sandbox state templates
 $Script:DefaultState = @{
-    Package = @{
+    Scoop = @{
         apps = @()
         buckets = @(
             @{ name = "main"; source = "https://github.com/ScoopInstaller/Main" }
         )
+    }
+    Winget = @{
+        packages = @()
     }
     Registry = @{
         Explorer = @{
@@ -108,7 +111,7 @@ function Get-SandboxStatePath {
         Returns the path to a sandbox state file for the specified provider.
     
     .PARAMETER Provider
-        The provider name (Package, Registry, Service, Feature).
+        The provider name (Scoop, Winget, Registry, Service, Feature).
     
     .PARAMETER Profile
         The sandbox profile name (default: "default").
@@ -119,7 +122,7 @@ function Get-SandboxStatePath {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
-        [ValidateSet("Package", "Registry", "Service", "Feature")]
+        [ValidateSet("Scoop", "Winget", "Registry", "Service", "Feature")]
         [string]$Provider,
         
         [Parameter(Mandatory = $false)]
@@ -406,7 +409,7 @@ function Get-SandboxState {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
-        [ValidateSet("Package", "Registry", "Service", "Feature")]
+        [ValidateSet("Scoop", "Winget", "Registry", "Service", "Feature")]
         [string]$Provider
     )
     
@@ -445,7 +448,7 @@ function Set-SandboxState {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
-        [ValidateSet("Package", "Registry", "Service", "Feature")]
+        [ValidateSet("Scoop", "Winget", "Registry", "Service", "Feature")]
         [string]$Provider,
         
         [Parameter(Mandatory = $true)]
@@ -583,7 +586,7 @@ function Invoke-SandboxDryRun {
         Comparison = @{}
     }
     
-    $providers = @("Package", "Registry", "Service", "Feature")
+    $providers = @("Scoop", "Winget", "Registry", "Service", "Feature")
     
     foreach ($provider in $providers) {
         if (-not $Spec.ContainsKey($provider)) {
@@ -652,22 +655,48 @@ function Compare-ProviderState {
     }
     
     switch ($Provider) {
-        "Package" {
+        "Scoop" {
             $currentApps = @($Current.apps | ForEach-Object { $_.name })
             $desiredApps = @($Desired.Installed)
             
             foreach ($app in $desiredApps) {
-                if ($app -notin $currentApps) {
-                    $comparison.Added += $app
+                $appName = $app
+                if ($app -is [hashtable]) { $appName = $app.Name }
+                
+                if ($appName -notin $currentApps) {
+                    $comparison.Added += $appName
                 }
                 else {
-                    $comparison.Unchanged += $app
+                    $comparison.Unchanged += $appName
                 }
             }
             
             foreach ($app in $currentApps) {
                 if ($app -notin $desiredApps) {
                     $comparison.Removed += $app
+                }
+            }
+        }
+        
+        "Winget" {
+            $currentPackages = @($Current.packages | ForEach-Object { $_.Id })
+            $desiredPackages = @($Desired.Installed)
+            
+            foreach ($pkg in $desiredPackages) {
+                $pkgId = $pkg
+                if ($pkg -is [hashtable]) { $pkgId = $pkg.Name }
+                
+                if ($pkgId -notin $currentPackages) {
+                    $comparison.Added += $pkgId
+                }
+                else {
+                    $comparison.Unchanged += $pkgId
+                }
+            }
+            
+            foreach ($pkg in $currentPackages) {
+                if ($pkg -notin $desiredPackages) {
+                    $comparison.Removed += $pkg
                 }
             }
         }

@@ -23,7 +23,7 @@ function Resolve-ProviderList {
     )
     
     # Default providers
-    $defaultProviders = @("Package", "Registry", "Service", "Feature")
+    $defaultProviders = @("Scoop", "Winget", "Registry", "Service", "Feature")
     
     if ($Providers.Count -gt 0) {
         # Filter to requested providers

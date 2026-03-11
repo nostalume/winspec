@@ -35,7 +35,8 @@ Describe "Get-SpecSchema" {
         $schema = Get-SpecSchema
         $schema.Keys | Should -Contain "Name"
         $schema.Keys | Should -Contain "Registry"
-        $schema.Keys | Should -Contain "Package"
+        $schema.Keys | Should -Contain "Scoop"
+        $schema.Keys | Should -Contain "Winget"
         $schema.Keys | Should -Contain "Service"
         $schema.Keys | Should -Contain "Feature"
         $schema.Keys | Should -Contain "Trigger"
@@ -49,7 +50,7 @@ Describe "Test-SpecSchema" {
             Registry = @{
                 Explorer = @{ ShowHidden = $true }
             }
-            Package = @{
+            Scoop = @{
                 Installed = @("git", "nodejs")
             }
         }
