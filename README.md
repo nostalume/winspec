@@ -249,6 +249,48 @@ Capture your current system setup (or start fresh):
 }
 ```
 
+### Skipping Providers
+
+WinSpec is modular - you can use only the providers you need. Simply omit the providers you don't want to configure:
+
+```powershell
+# Only configure Registry - other providers will be ignored
+@{
+    Name = "registry-only"
+    Registry = @{
+        Explorer = @{
+            ShowHidden = $true
+        }
+    }
+}
+```
+
+```powershell
+# Only configure Package - no Registry, Service, Feature, or Triggers
+@{
+    Name = "packages-only"
+    Package = @{
+        Installed = @("git", "neovim")
+    }
+}
+```
+
+```powershell
+# Only use Triggers - no declarative providers
+@{
+    Name = "triggers-only"
+    Trigger = @(
+        @{ Name = "Activation" }
+    )
+}
+```
+
+**When pulling with specific providers:**
+```powershell
+# Pull only Registry and Package state (ignore Service, Feature)
+winspec pull -Providers Registry,Package -Output my-config.ps1
+```
+
 ### Examples
 
 **Daily Workflows:**

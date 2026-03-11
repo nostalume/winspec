@@ -125,6 +125,50 @@ Engine: Execute action → Report result
 
 ---
 
+## Skipping Providers
+
+WinSpec is modular - you can use only the providers you need. Simply omit the providers you don't want to configure:
+
+```powershell
+# Only configure Registry - other providers will be ignored
+@{
+    Name = "registry-only"
+    Registry = @{
+        Explorer = @{
+            ShowHidden = $true
+        }
+    }
+}
+```
+
+```powershell
+# Only configure Package - no Registry, Service, Feature, or Triggers
+@{
+    Name = "packages-only"
+    Package = @{
+        Installed = @("git", "neovim")
+    }
+}
+```
+
+```powershell
+# Only use Triggers - no declarative providers
+@{
+    Name = "triggers-only"
+    Trigger = @(
+        @{ Name = "Activation" }
+    )
+}
+```
+
+**When pulling with specific providers:**
+```powershell
+# Pull only Registry and Package state (ignore Service, Feature)
+winspec pull -Providers Registry,Package -Output my-config.ps1
+```
+
+---
+
 ## CLI Interface (Git-like Commands)
 
 WinSpec uses Git-like commands for state manipulation:
@@ -376,4 +420,31 @@ The following legacy commands are supported as aliases:
 
 ---
 
-*WinSpec Design Document v3.0 - Updated with Git-like commands*
+## Implementation Checklist
+
+All implementation phases from the redesign have been completed:
+
+- [x] Phase 1: Consolidate Path Resolution (utils.psm1)
+- [x] Phase 2: Consolidate Config Operations (utils.psm1)
+- [x] Phase 3: Simplify core.psm1 → exec.psm1 (remove duplicates)
+- [x] Phase 4: Create pull.psm1
+- [x] Phase 5: Create push.psm1
+- [x] Phase 6: Update CLI dispatch (winspec.ps1)
+- [x] Phase 7: Remove old modules (export.psm1, init.psm1, sync.psm1, core.psm1)
+- [x] Phase 8: Update documentation (docs/redesign.md, docs/design.md)
+- [x] Phase 9: Tests reconstruction
+
+### Implementation Order
+
+1. Path resolution consolidated in utils.psm1
+2. Config operations consolidated in utils.psm1
+3. core.psm1 refactored to exec.psm1
+4. pull.psm1 created (replaces export.psm1, init.psm1)
+5. push.psm1 created (replaces apply wrapper)
+6. CLI dispatch updated in winspec.ps1
+7. Legacy modules removed
+8. Tests updated to new architecture
+
+---
+
+*WinSpec Design Document v3.1 - Updated with implementation completion*
