@@ -64,18 +64,22 @@ Describe "Invoke-Pull" {
     }
 }
 
-Describe "Invoke-PullInteractive" {
-    Context "Function existence" {
-        It "Should have Invoke-PullInteractive function" {
-            Get-Command Invoke-PullInteractive -ErrorAction SilentlyContinue | Should -Not -BeNullOrEmpty
+Describe "Invoke-Pull with Interactive parameter" {
+    Context "Functionality" {
+        It "Should accept Interactive parameter" {
+            # Interactive parameter is part of Invoke-Pull function
+            Get-Command Invoke-Pull | Should -Not -BeNullOrEmpty
+            (Get-Command Invoke-Pull).Parameters.Keys | Should -Contain 'Interactive'
         }
     }
 }
 
-Describe "Invoke-PullMinimal" {
-    Context "Function existence" {
-        It "Should have Invoke-PullMinimal function" {
-            Get-Command Invoke-PullMinimal -ErrorAction SilentlyContinue | Should -Not -BeNullOrEmpty
+Describe "Invoke-Pull with Minimal parameter" {
+    Context "Functionality" {
+        It "Should accept Minimal parameter" {
+            # Minimal parameter is part of Invoke-Pull function
+            Get-Command Invoke-Pull | Should -Not -BeNullOrEmpty
+            (Get-Command Invoke-Pull).Parameters.Keys | Should -Contain 'Minimal'
         }
     }
 }

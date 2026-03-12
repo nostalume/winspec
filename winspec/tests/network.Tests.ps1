@@ -122,7 +122,7 @@ Describe "Network Error Handling - Invoke-RestMethod" {
 
 Describe "Network Error Handling - Package Manager" {
     BeforeAll {
-        Import-Module "$script:WinspecRoot\managers\package.psm1" -Force
+        Import-Module "$script:WinspecRoot\managers\scoop.psm1" -Force
     }
     
     Context "Scoop Available" {

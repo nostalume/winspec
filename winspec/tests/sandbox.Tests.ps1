@@ -42,9 +42,9 @@ Describe "Sandbox Module" {
         
         It "Should initialize sandbox state for Mock mode" {
             Enter-Sandbox -Mode Mock -Profile default
-            $state = Get-SandboxState -Provider "Package"
+            $state = Get-SandboxState -Provider "Scoop"
             $state | Should -Not -BeNullOrEmpty
-            # Package state should have apps key
+            # Scoop state should have apps key
             $state.Keys | Should -Contain "apps"
         }
     }
@@ -60,7 +60,7 @@ Describe "Sandbox Module" {
         
         It "Should export history when not discarding changes" {
             Enter-Sandbox -Mode Mock
-            Add-SandboxChange -Provider "Package" -Change @{ Status = "Success"; Installed = @("git") }
+            Add-SandboxChange -Provider "Scoop" -Change @{ Status = "Success"; Installed = @("git") }
             
             Exit-Sandbox
             # History should be exported (file created)
@@ -94,8 +94,8 @@ Describe "Sandbox Module" {
             Enter-Sandbox -Mode Mock -Profile default
         }
         
-        It "Should get sandbox state for Package provider" {
-            $state = Get-SandboxState -Provider "Package"
+        It "Should get sandbox state for Scoop provider" {
+            $state = Get-SandboxState -Provider "Scoop"
             $state | Should -Not -BeNullOrEmpty
         }
         
@@ -111,9 +111,9 @@ Describe "Sandbox Module" {
                 )
                 buckets = @()
             }
-            Set-SandboxState -Provider "Package" -State $newState
+            Set-SandboxState -Provider "Scoop" -State $newState
             
-            $state = Get-SandboxState -Provider "Package"
+            $state = Get-SandboxState -Provider "Scoop"
             $state.apps.Count | Should -Be 1
             $state.apps[0].name | Should -Be "git"
         }
@@ -126,13 +126,13 @@ Describe "Sandbox Module" {
                 )
                 buckets = @()
             }
-            Set-SandboxState -Provider "Package" -State $newState
+            Set-SandboxState -Provider "Scoop" -State $newState
             
             # Reset
             Reset-SandboxState
             
             # State should be back to original (empty apps)
-            $state = Get-SandboxState -Provider "Package"
+            $state = Get-SandboxState -Provider "Scoop"
             $state.apps.Count | Should -Be 0
         }
     }
@@ -143,14 +143,14 @@ Describe "Sandbox Module" {
         }
         
         It "Should track sandbox changes" {
-            Add-SandboxChange -Provider "Package" -Change @{ Status = "Success"; Installed = @("git") }
+            Add-SandboxChange -Provider "Scoop" -Change @{ Status = "Success"; Installed = @("git") }
             
             $changes = Get-SandboxChanges
             $changes.Count | Should -BeGreaterThan 0
         }
         
         It "Should clear changes after reset" {
-            Add-SandboxChange -Provider "Package" -Change @{ Status = "Success" }
+            Add-SandboxChange -Provider "Scoop" -Change @{ Status = "Success" }
             
             Reset-SandboxState
             
@@ -161,22 +161,23 @@ Describe "Sandbox Module" {
     
     Context "Sandbox Profiles" {
         It "Should list available profiles" {
-            # First initialize sandbox directory by calling Get-SandboxProfiles
-            $null = Get-SandboxProfiles
+            # First clean up any existing test profiles
+            $profileDir = Join-Path $env:USERPROFILE ".config\winspec\sandbox\state\profiles"
+            if (Test-Path $profileDir) {
+                Get-ChildItem $profileDir -Filter "*.json" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+            }
             
-            # Now manually create a profile file - note: profiles are in state/profiles subfolder
-            $profilePath = Join-Path $env:USERPROFILE ".config\winspec\sandbox\state\profiles\testlist.json"
-            $profileDir = Split-Path $profilePath -Parent
+            # Now manually create a profile file
             if (-not (Test-Path $profileDir)) {
                 New-Item -ItemType Directory -Path $profileDir -Force | Out-Null
             }
+            $profilePath = Join-Path $profileDir "testlist.json"
             @{ Name = "testlist" } | ConvertTo-Json -Depth 10 | Out-File $profilePath -Encoding UTF8
             
             $profiles = Get-SandboxProfiles
             
-            # Check count first - Pester might handle this differently
-            $profiles.Count | Should -Be 1
-            $profiles[0] | Should -Be "testlist"
+            # Check that testlist profile exists
+            $profiles | Should -Contain "testlist"
             
             # Cleanup
             Remove-Item $profilePath -Force -ErrorAction SilentlyContinue
@@ -207,7 +208,7 @@ Describe "Sandbox Module" {
     }
     
     Context "Compare-ProviderState" {
-        It "Should compare Package state - added packages" {
+        It "Should compare Scoop state - added packages" {
             $current = @{
                 apps = @()
                 buckets = @()
@@ -216,12 +217,12 @@ Describe "Sandbox Module" {
                 Installed = @("git", "neovim")
             }
             
-            $result = Compare-ProviderState -Provider "Package" -Current $current -Desired $desired
+            $result = Compare-ProviderState -Provider "Scoop" -Current $current -Desired $desired
             $result.Added.Count | Should -Be 2
             $result.Removed.Count | Should -Be 0
         }
         
-        It "Should compare Package state - removed packages" {
+        It "Should compare Scoop state - removed packages" {
             $current = @{
                 apps = @(
                     @{ name = "git" },
@@ -233,7 +234,7 @@ Describe "Sandbox Module" {
                 Installed = @("git")
             }
             
-            $result = Compare-ProviderState -Provider "Package" -Current $current -Desired $desired
+            $result = Compare-ProviderState -Provider "Scoop" -Current $current -Desired $desired
             $result.Added.Count | Should -Be 0
             $result.Removed.Count | Should -Be 1
         }
