@@ -21,6 +21,14 @@ Describe "Invoke-Pull" {
             { Invoke-Pull -Providers @("Scoop") -WhatIf } | Should -Not -Throw
         }
         
+        It "Should accept Providers parameter with Winget" {
+            { Invoke-Pull -Providers @("Winget") -WhatIf } | Should -Not -Throw
+        }
+        
+        It "Should accept multiple Providers parameter" {
+            { Invoke-Pull -Providers @("Scoop", "Winget") -WhatIf } | Should -Not -Throw
+        }
+        
         It "Should accept Spec parameter" {
             { Invoke-Pull -Spec "test.ps1" -WhatIf } | Should -Not -Throw
         }

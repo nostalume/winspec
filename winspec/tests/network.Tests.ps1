@@ -121,19 +121,20 @@ Describe "Network Error Handling - Invoke-RestMethod" {
 }
 
 Describe "Network Error Handling - Package Manager" {
-    BeforeAll {
-        Import-Module "$script:WinspecRoot\managers\scoop.psm1" -Force
-    }
-    
     Context "Scoop Available" {
         BeforeAll {
-            Mock Get-Command { 
-                return [PSCustomObject]@{ Name = "scoop" }
-            } -ParameterFilter { $Name -eq "scoop" }
+            # Import module first
+            Import-Module "$script:WinspecRoot\managers\scoop.psm1" -Force
         }
         
         It "Should detect Scoop is installed" {
-            Test-ScoopInstalled | Should -Be $true
+            # Mock within the test to ensure proper scoping
+            Mock Get-Command -ModuleName scoop { 
+                return [PSCustomObject]@{ Name = "scoop" }
+            } -ParameterFilter { $Name -eq "scoop" }
+            
+            $result = Test-ScoopInstalled
+            $result | Should -Be $true
         }
     }
     
@@ -146,16 +147,20 @@ Describe "Network Error Handling - Package Manager" {
     
     Context "Mock Scoop Export" {
         BeforeAll {
-            Mock Get-Command { 
-                return [PSCustomObject]@{ Name = "scoop" }
-            }
-            
-            Mock Invoke-Expression { 
-                return '{"apps":[],"buckets":[]}'
-            } -ParameterFilter { $_ -match "scoop export" }
+            # Import module first
+            Import-Module "$script:WinspecRoot\managers\scoop.psm1" -Force
         }
         
         It "Should parse Scoop export JSON" {
+            # Mock within the test to ensure proper scoping
+            Mock Get-Command -ModuleName scoop { 
+                return [PSCustomObject]@{ Name = "scoop" }
+            } -ParameterFilter { $Name -eq "scoop" }
+            
+            Mock Invoke-Expression -ModuleName scoop { 
+                return '{"apps":[],"buckets":[]}'
+            } -ParameterFilter { $_ -match "scoop export" }
+            
             $result = Get-ScoopExport
             $result | Should -Not -BeNullOrEmpty
         }

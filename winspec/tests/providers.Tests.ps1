@@ -439,3 +439,79 @@ Describe "Package Provider" {
         }
     }
 }
+
+Describe "Winget Provider" {
+    BeforeAll {
+        # Import only the winget module for this test block
+        Import-Module "$PSScriptRoot\..\managers\winget.psm1" -Force
+        
+        # Mock Get-Command for winget detection
+        Mock Get-Command -ModuleName winget { 
+            return [PSCustomObject]@{
+                Name = "winget"
+                Source = "winget"
+            }
+        } -ParameterFilter { $Name -eq "winget" }
+    }
+    
+    Context "Get-ProviderInfo" {
+        It "Should return correct provider info" {
+            $info = Get-ProviderInfo
+            $info.Name | Should -Be "Winget"
+            $info.Type | Should -Be "Declarative"
+        }
+    }
+    
+    Context "Test-WingetInstalled" {
+        It "Should return true when Winget is installed" {
+            $result = Test-WingetInstalled
+            $result | Should -Be $true
+        }
+        
+        It "Should throw error when Winget is not installed" {
+            Mock Get-Command -ModuleName winget { return $null } -ParameterFilter { $Name -eq "winget" }
+            
+            { Test-WingetInstalled } | Should -Throw
+        }
+    }
+    
+    Context "Get-PackageName" {
+        It "Should extract name from string" {
+            $name = Get-PackageName -Package "Git.Git"
+            $name | Should -Be "Git.Git"
+        }
+        
+        It "Should extract name from hashtable" {
+            $pkg = @{
+                Name = "Git.Git"
+                Flags = "--silent"
+            }
+            $name = Get-PackageName -Package $pkg
+            $name | Should -Be "Git.Git"
+        }
+    }
+    
+    Context "Get-PackageFlags" {
+        It "Should return empty string for string input" {
+            $flags = Get-PackageFlags -Package "Git.Git"
+            $flags | Should -Be ""
+        }
+        
+        It "Should extract flags from hashtable" {
+            $pkg = @{
+                Name = "Git.Git"
+                Flags = "--silent --accept-package-agreements"
+            }
+            $flags = Get-PackageFlags -Package $pkg
+            $flags | Should -Be "--silent --accept-package-agreements"
+        }
+        
+        It "Should return empty string when no flags" {
+            $pkg = @{
+                Name = "Git.Git"
+            }
+            $flags = Get-PackageFlags -Package $pkg
+            $flags | Should -Be ""
+        }
+    }
+}

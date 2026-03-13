@@ -57,5 +57,3 @@ Describe "Invoke-Push" {
         }
     }
 }
-
-# End of tests

@@ -28,7 +28,8 @@ BeforeAll {
     Mock Disable-WindowsOptionalFeature { }
     Mock Invoke-RestMethod { return "@{ Name = 'mocked' }" }
     Mock Invoke-WebRequest { return [PSCustomObject]@{ StatusCode = 200; Content = "{}" } }
-    Mock Get-Command { return $null }
+    # Use specific mocks instead of catch-all to avoid conflicts with other test files
+    Mock Get-ItemProperty { return @{ TestProp = 1 } }
     Mock Invoke-Expression { return '{"apps":[],"buckets":[]}' }
     Mock Start-Process { }
     Mock New-Item { return @{ FullName = "MockPath" } }
