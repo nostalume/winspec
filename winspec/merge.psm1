@@ -324,28 +324,55 @@ function Merge-ValuesUnion {
     <#
     .SYNOPSIS
         Creates a union of two values (arrays are concatenated, hashtables are merged).
+    .PARAMETER BaseValue
+        The base value.
+    .PARAMETER IncomingValue
+        The incoming value to merge.
+    .PARAMETER MaxDepth
+        Maximum recursion depth to prevent stack overflow on circular refs.
+    .PARAMETER CurrentDepth
+        Internal parameter tracking current recursion depth.
     #>
-    param($BaseValue, $IncomingValue)
+    param(
+        $BaseValue,
+        $IncomingValue,
+        [int]$MaxDepth = 10,
+        [int]$CurrentDepth = 0
+    )
+    
+    # Check recursion depth
+    if ($CurrentDepth -gt $MaxDepth) {
+        Write-Verbose "Merge-ValuesUnion: Max depth ($MaxDepth) exceeded"
+        return $IncomingValue
+    }
     
     # Handle arrays
     if ($BaseValue -is [array] -or $IncomingValue -is [array]) {
         $baseArray = if ($BaseValue -is [array]) { $BaseValue } else { @($BaseValue) }
         $incomingArray = if ($IncomingValue -is [array]) { $IncomingValue } else { @($IncomingValue) }
         
-        # Union with deduplication for primitive types
-        $result = @($baseArray)
-        foreach ($item in $incomingArray) {
-            $found = $false
-            foreach ($existing in $result) {
-                if (Test-ValuesEqual -Value1 $item -Value2 $existing) {
-                    $found = $true
-                    break
-                }
-            }
-            if (-not $found) {
+        # Union with deduplication using hashtable for O(n) lookup
+        $seen = @{}  # Hashtable for O(1) lookup
+        $result = @()
+        
+        # Process base array
+        foreach ($item in $baseArray) {
+            $key = $item.ToString()
+            if (-not $seen.ContainsKey($key)) {
+                $seen[$key] = $true
                 $result += $item
             }
         }
+        
+        # Process incoming array
+        foreach ($item in $incomingArray) {
+            $key = $item.ToString()
+            if (-not $seen.ContainsKey($key)) {
+                $seen[$key] = $true
+                $result += $item
+            }
+        }
+        
         return $result
     }
     
@@ -363,7 +390,7 @@ function Merge-ValuesUnion {
             if ($result.ContainsKey($key)) {
                 # Key exists in both - recursively merge if both are hashtables
                 if ($result[$key] -is [hashtable] -and $IncomingValue[$key] -is [hashtable]) {
-                    $result[$key] = Merge-ValuesUnion -BaseValue $result[$key] -IncomingValue $IncomingValue[$key]
+                    $result[$key] = Merge-ValuesUnion -BaseValue $result[$key] -IncomingValue $IncomingValue[$key] -MaxDepth $MaxDepth -CurrentDepth ($CurrentDepth + 1)
                 }
                 # Otherwise, incoming takes precedence
                 else {
@@ -480,4 +507,9 @@ function Format-MergeReport {
 Export-ModuleMember -Function @(
     "Merge-Configuration"
     "Format-MergeReport"
+    "Merge-ValuesUnion"
+    "Invoke-MergeEngine"
+    "Resolve-MergeItem"
+    "Resolve-ByStrategy"
+    "Invoke-ConflictResolution"
 )

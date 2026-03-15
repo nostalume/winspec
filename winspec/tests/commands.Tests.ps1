@@ -9,7 +9,6 @@ BeforeAll {
     Import-Module "$script:WinspecRoot\state.psm1" -Force
     Import-Module "$script:WinspecRoot\registry-maps.psm1" -Force
     Import-Module "$script:WinspecRoot\schema.psm1" -Force
-    Import-Module "$script:WinspecRoot\exec.psm1" -Force
     Import-Module "$script:WinspecRoot\pull.psm1" -Force
     Import-Module "$script:WinspecRoot\push.psm1" -Force
     
@@ -169,22 +168,6 @@ Describe "WinSpec CLI Commands - Pull Command" {
         
         It "Should accept Description parameter" {
             { Invoke-Pull -Description "Test description" -WhatIf } | Should -Not -Throw
-        }
-    }
-}
-
-Describe "WinSpec CLI Commands - Provider Discovery" {
-    Context "Get-DiscoveredProviders" {
-        It "Should discover trigger providers" {
-            Import-Module "$script:WinspecRoot\exec.psm1" -Force
-            
-            $triggersPath = Join-Path $script:WinspecRoot "triggers"
-            $triggers = Get-DiscoveredProviders -Path $triggersPath -Type "Trigger"
-            
-            $triggers.Count | Should -BeGreaterThan 0
-            $triggers | Should -Contain "Activation"
-            $triggers | Should -Contain "Debloat"
-            $triggers | Should -Contain "Office"
         }
     }
 }

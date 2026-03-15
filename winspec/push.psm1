@@ -6,7 +6,6 @@
 Import-Module (Join-Path $PSScriptRoot "logging.psm1") -Force
 Import-Module (Join-Path $PSScriptRoot "utils.psm1") -Force
 Import-Module (Join-Path $PSScriptRoot "registry-maps.psm1") -Force
-Import-Module (Join-Path $PSScriptRoot "exec.psm1") -Force
 
 # =============================================================================
 # PUSH COMMAND - Apply config to system
@@ -18,7 +17,6 @@ function Invoke-Push {
         Pushes configuration to the system.
     .DESCRIPTION
         Applies a configuration spec to the system.
-        Integrates with exec.psm1 for actual execution.
     .PARAMETER Spec
         Path to the configuration spec file.
     .PARAMETER ConfigPath
@@ -37,36 +35,22 @@ function Invoke-Push {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $false)]
-        [string]$Spec,
+        [hashtable]$Spec,
         
         [Parameter(Mandatory = $false)]
-        [string]$ConfigPath,
+        [string[]]$Providers,
+
+        [Parameter(Mandatory = $false)]
+        $Triggers,
         
         [Parameter(Mandatory = $false)]
         [switch]$DryRun,
         
         [Parameter(Mandatory = $false)]
-        [switch]$Checkpoint,
-        
-        [Parameter(Mandatory = $false)]
-        [switch]$WithTriggers,
-        
-        [Parameter(Mandatory = $false)]
-        [string[]]$Providers
+        [switch]$Checkpoint
     )
     
     Write-LogHeader -Title "WinSpec Push"
-    
-    # Resolve spec path
-    if (-not $Spec) {
-        $Spec = Resolve-SpecPath -Spec $Spec -ConfigPath $ConfigPath
-        if (-not $Spec) {
-            Write-Log -Level "ERROR" -Message "No spec file specified or found. Use -Spec to specify a config file."
-            return @{ Success = $false; Error = "No spec file" }
-        }
-    }
-    
-    Write-Log -Level "INFO" -Message "Using spec: $Spec"
     
     # Handle sandbox mode
     Import-Module (Join-Path $PSScriptRoot "sandbox.psm1") -Force
@@ -76,7 +60,7 @@ function Invoke-Push {
     $isSandbox = Test-SandboxActive
     if ($isSandbox) {
         $sandboxModeValue = Get-SandboxMode
-        Write-Log -Level "INFO" -Message "=== SANDBOX MODE: $sandboxModeValue ==="
+        Write-LogHeader "SANDBOX MODE: $sandboxModeValue"
     }
     elseif ($DryRun) {
         $sandboxModeValue = "DryRun"
@@ -87,8 +71,7 @@ function Invoke-Push {
         Enter-Sandbox -Mode $sandboxModeValue
     }
     
-    # Execute using exec.psm1
-    $result = Invoke-WinSpec -Spec $Spec -ConfigPath $ConfigPath -Checkpoint:$Checkpoint -WithTriggers:$WithTriggers
+    $result = Invoke-WinSpec -Spec $Spec -Providers $Providers -Triggers $Triggers -Checkpoint:$Checkpoint 
     
     # Handle results
     if (-not $result.Success) {
@@ -112,9 +95,6 @@ function Invoke-Push {
     Write-Log -Level "OK" -Message "Push completed successfully"
     return $result
 }
-
-# Alias for backward compatibility
-Set-Alias -Name "Apply-Configuration" -Value "Invoke-Push" -Scope Global
 
 Export-ModuleMember -Function @(
     "Invoke-Push"

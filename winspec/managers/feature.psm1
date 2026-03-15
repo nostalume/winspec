@@ -1,9 +1,7 @@
 # providers/feature.psm1 - Declarative Windows features provider
 
-# Import dependent modules
 Import-Module (Join-Path $PSScriptRoot "..\logging.psm1") -Force
-
-# Import sandbox module once at module load time (consistent with service.psm1)
+Import-Module (Join-Path $PSScriptRoot "..\utils.psm1") -Force
 Import-Module (Join-Path $PSScriptRoot "..\sandbox.psm1") -Force -ErrorAction SilentlyContinue
 
 function Get-ProviderInfo {
@@ -14,17 +12,22 @@ function Get-ProviderInfo {
 }
 
 function Get-FeatureState {
+
     [CmdletBinding()]
-    param (
-        [Parameter(Mandatory = $true)]
+    param(
+        [Parameter(Mandatory)]
         [string]$FeatureName
     )
-    
+
     try {
-        $feature = Get-WindowsOptionalFeature -Online -FeatureName $FeatureName -ErrorAction SilentlyContinue
-        if ($feature) {
-            return $feature.State
+        $state = Invoke-AdminCommand {
+            (Get-WindowsOptionalFeature -Online -FeatureName '$FeatureName' -ErrorAction SilentlyContinue).State
         }
+
+        if ($state) {
+            return $state.Trim()
+        }
+
         return $null
     }
     catch {
@@ -43,7 +46,7 @@ function Test-FeatureInDesiredState {
     )
     
     return ($DesiredState -eq "enabled" -and $CurrentState -eq "Enabled") -or
-           ($DesiredState -eq "disabled" -and $CurrentState -eq "Disabled")
+    ($DesiredState -eq "disabled" -and $CurrentState -eq "Disabled")
 }
 
 function Test-FeatureState {
@@ -106,10 +109,14 @@ function Set-FeatureState {
         if ($PSCmdlet.ShouldProcess($featureName, "Set state to '$desiredState'")) {
             try {
                 if ($desiredState -eq "enabled") {
-                    Enable-WindowsOptionalFeature -Online -FeatureName $featureName -NoRestart -All -ErrorAction Stop
+                    Invoke-AdminCommand {
+                        Enable-WindowsOptionalFeature -Online -FeatureName '$featureName' -NoRestart -All
+                    }
                 }
                 else {
-                    Disable-WindowsOptionalFeature -Online -FeatureName $featureName -NoRestart -ErrorAction Stop
+                    Invoke-AdminCommand {
+                        Disable-WindowsOptionalFeature -Online -FeatureName '$featureName' -NoRestart
+                    }
                 }
                 
                 Write-LogApplied -Name $featureName -DesiredValue $desiredState
@@ -140,33 +147,23 @@ function Export-FeatureState {
     #>
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory = $false)]
         [string[]]$FeatureNames = @()
     )
-    
+
     $result = @{}
-    
+
     try {
-        if ($FeatureNames.Count -eq 0) {
-            # Get all enabled features
-            $features = Get-WindowsOptionalFeature -Online | Where-Object { 
-                $_.State -eq 'Enabled' 
-            } | Select-Object -ExpandProperty FeatureName
-            $FeatureNames = $features
-        }
-        
-        foreach ($featureName in $FeatureNames) {
-            $state = Get-FeatureState -FeatureName $featureName
-            if ($state) {
-                # Convert to lowercase for consistency
-                $result[$featureName] = $state.ToString().ToLower()
-            }
+        $features = Invoke-AdminCommand { Get-WindowsOptionalFeature -Online | 
+            Where-Object { $_.State -eq 'Enabled' } |
+            Select-Object FeatureName, State }
+        foreach ($f in $features) {
+            $result[$f.FeatureName] = $f.State.ToString()
         }
     }
     catch {
         Write-Log -Level "ERROR" -Message "Failed to export feature state: $($_.Exception.Message)"
     }
-    
+
     return $result
 }
 
@@ -204,8 +201,8 @@ function Compare-FeatureState {
         if ($null -eq $systemState) {
             # Feature not in system
             $differences += @{
-                Type = "Added"
-                Path = $path
+                Type        = "Added"
+                Path        = $path
                 SystemValue = $null
                 ConfigValue = $desiredState
             }
@@ -213,8 +210,8 @@ function Compare-FeatureState {
         elseif ($systemState -ne $desiredState) {
             # State changed
             $differences += @{
-                Type = "Changed"
-                Path = $path
+                Type        = "Changed"
+                Path        = $path
                 SystemValue = $systemState
                 ConfigValue = $desiredState
             }
@@ -226,8 +223,8 @@ function Compare-FeatureState {
     foreach ($featureName in $System.Keys) {
         if (-not $Desired.ContainsKey($featureName)) {
             $differences += @{
-                Type = "Removed"
-                Path = "Feature.$featureName"
+                Type        = "Removed"
+                Path        = "Feature.$featureName"
                 SystemValue = $System[$featureName]
                 ConfigValue = $null
             }
@@ -306,7 +303,7 @@ function Invoke-FeatureSandboxApply {
     $currentState = Get-SandboxState -Provider "Feature"
     
     $results = @{
-        Status = "Success"
+        Status  = "Success"
         Changed = @()
     }
     
@@ -316,7 +313,7 @@ function Invoke-FeatureSandboxApply {
         
         if ($currentValue -ne $desiredValue) {
             $results.Changed += @{
-                Name = $feature
+                Name     = $feature
                 OldValue = $currentValue
                 NewValue = $desiredValue
             }

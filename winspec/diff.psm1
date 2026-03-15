@@ -32,10 +32,10 @@ function Invoke-Diff {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $false)]
-        [string]$Spec,
+        [hashtable]$Spec,
         
         [Parameter(Mandatory = $false)]
-        [string]$Against,
+        [hashtable]$Against,
         
         [Parameter(Mandatory = $false)]
         [string[]]$Providers = @(),
@@ -50,18 +50,7 @@ function Invoke-Diff {
     
     Write-Log -Level "INFO" -Message "Starting diff operation..."
     
-    # Resolve spec path
-    $specPath = Resolve-SpecPath -Spec $Spec
-    if (-not $specPath) {
-        Write-Log -Level "ERROR" -Message "No spec file specified or found. Use -Spec to specify a config file."
-        return $null
-    }
-    
-    Write-Log -Level "INFO" -Message "Using spec: $specPath"
-    
-    # Perform the comparison using state.psm1
-    $differences = Compare-SystemState -SpecPath $specPath -Against $Against -Providers $Providers
-    
+    $differences = Compare-SystemState -Spec $source -Against $against -Providers $Providers
     if ($null -eq $differences) {
         Write-Log -Level "ERROR" -Message "Failed to compare system state"
         return $null
@@ -111,8 +100,7 @@ function Invoke-Diff {
 }
 
 # Alias for backward compatibility
-Set-Alias -Name "Compare-SystemState" -Value "Invoke-Diff" -Scope Global
-Set-Alias -Name "Format-DiffOutput" -Value "Format-DiffOutput" -Scope Global
+# Set-Alias -Name "Compare-SystemState" -Value "Invoke-Diff" -Scope Global
 
 Export-ModuleMember -Function @(
     "Invoke-Diff"

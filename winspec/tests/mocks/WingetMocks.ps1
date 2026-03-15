@@ -35,65 +35,156 @@ function Mock-WingetNotInstalled {
 function Mock-WingetExportWithApps {
     <#
     .SYNOPSIS
-        Mocks winget list with specified packages
+        Mocks winget export with specified packages (JSON format) to file
     .PARAMETER Packages
-        Array of package objects to include in list
+        Array of package objects to include in export
     #>
-    param(
-        [array]$Packages = @()
-    )
+    param([array]$Packages = @())
     
-    # Build the output format that winget list returns
-    # Header: Name                          Id                           Version      Available
-    # Line:  Package Name                   package.id                   1.0.0       
-    $output = @"
-Name                          Id                           Version      Available
-----                          --                           -------      ---------
-"@
-    
+    $pkgArray = @()
     foreach ($pkg in $Packages) {
-        $name = $pkg.Name
-        $id = $pkg.Id
-        $version = if ($pkg.Version) { $pkg.Version } else { "1.0.0" }
-        
-        # Format: name (left-padded to 28 chars) + id (left-padded to 30) + version
-        $output += "`n$($name.PadRight(28))$($id.PadRight(30))$version"
+        $pkgArray += @{ PackageIdentifier = $pkg.Id }
     }
     
+    $jsonObj = @{
+        '$schema' = 'https://aka.ms/winget-packages.schema.2.0.json'
+        CreationDate = '2024-01-15T10:30:00Z'
+        Sources = @(
+            @{
+                Packages = $pkgArray
+                SourceDetails = @{
+                    Argument = 'https://cdn.winget.microsoft.com/cache'
+                    Identifier = 'Microsoft.Winget.Source_8wekyb3d8bbwe'
+                    Name = 'winget'
+                    Type = 'Microsoft.PreIndexed.Package'
+                }
+            }
+        )
+        WinGetVersion = '1.6.3133'
+    }
+    
+    $jsonOutput = $jsonObj | ConvertTo-Json -Depth 10
+    
     Mock Invoke-Expression {
-        return $output
-    } -ParameterFilter { $_ -match "^winget list" -or $_ -match "winget list" }
+        # Handle -o <file> parameter
+        if ($_ -match 'winget export.*-o\s+(\S+)') {
+            $matches[1] | Out-File -FilePath $matches[1] -Encoding utf8
+        }
+        return $jsonOutput
+    } -ParameterFilter { $_ -match "winget export" }
 }
 
 function Mock-WingetExportEmpty {
     <#
     .SYNOPSIS
-        Mocks empty winget list (no packages)
+        Mocks empty winget export (no packages)
     #>
+    $jsonObj = @{
+        '$schema' = 'https://aka.ms/winget-packages.schema.2.0.json'
+        CreationDate = '2024-01-15T10:30:00Z'
+        Sources = @()
+        WinGetVersion = '1.6.3133'
+    }
+    
+    $jsonOutput = $jsonObj | ConvertTo-Json
+    
     Mock Invoke-Expression {
-        return @"
-Name                          Id                           Version      Available
-----                          --                           -------      ---------
-"@
-    } -ParameterFilter { $_ -match "^winget list" -or $_ -match "winget list" }
+        if ($_ -match 'winget export.*-o\s+(\S+)') {
+            $matches[1] | Out-File -FilePath $matches[1] -Encoding utf8
+        }
+        return $jsonOutput
+    } -ParameterFilter { $_ -match "winget export" }
 }
 
 function Mock-WingetExportWithGitAndVSCode {
     <#
     .SYNOPSIS
-        Mocks winget list with git and vscode installed
+        Mocks winget export with git, vscode and other packages (JSON format)
     #>
+    $jsonObj = @{
+        '$schema' = 'https://aka.ms/winget-packages.schema.2.0.json'
+        CreationDate = '2024-01-15T10:30:00Z'
+        Sources = @(
+            @{
+                Packages = @(
+                    @{ PackageIdentifier = 'Git.Git' },
+                    @{ PackageIdentifier = 'Microsoft.VisualStudioCode' },
+                    @{ PackageIdentifier = 'OpenJS.NodeJSLTS' },
+                    @{ PackageIdentifier = 'Python.Python.3.11' },
+                    @{ PackageIdentifier = 'Docker.DockerDesktop' }
+                )
+                SourceDetails = @{
+                    Argument = 'https://cdn.winget.microsoft.com/cache'
+                    Identifier = 'Microsoft.Winget.Source_8wekyb3d8bbwe'
+                    Name = 'winget'
+                    Type = 'Microsoft.PreIndexed.Package'
+                }
+            }
+        )
+        WinGetVersion = '1.6.3133'
+    }
+    
+    $jsonOutput = $jsonObj | ConvertTo-Json -Depth 10
+    
     Mock Invoke-Expression {
-        return @"
-Name                          Id                           Version      Available
-----                          --                           -------      ---------
-Git                           Git.Git                       2.42.0       
-Visual Studio Code            Microsoft.VisualStudioCode    1.85.0       
-Node.js LTS                   OpenJS.NodeJSLTS              20.10.0      
-Python                        Python.Python.3.11            3.11.7       
-Docker Desktop                Docker.DockerDesktop          4.26.0       
-"@
-    } -ParameterFilter { $_ -match "^winget list" -or $_ -match "winget list" }
+        if ($_ -match 'winget export.*-o\s+(\S+)') {
+            $matches[1] | Out-File -FilePath $matches[1] -Encoding utf8
+        }
+        return $jsonOutput
+    } -ParameterFilter { $_ -match "winget export" }
+}
+
+function Mock-WingetExportWithSources {
+    <#
+    .SYNOPSIS
+        Mocks winget export with multiple sources
+    .PARAMETER Packages
+        Hashtable with source names as keys and package arrays as values
+    #>
+    param([hashtable]$PackagesBySource = @{})
+    
+    $sources = @()
+    
+    foreach ($sourceName in $PackagesBySource.Keys) {
+        $pkgs = $PackagesBySource[$sourceName]
+        $pkgArray = @()
+        foreach ($pkgId in $pkgs) {
+            $pkgArray += @{ PackageIdentifier = $pkgId }
+        }
+        
+        $sourceUrl = switch ($sourceName) {
+            'winget' { 'https://cdn.winget.microsoft.com/cache' }
+            'ustc' { 'https://mirrors.ustc.edu.cn/winget-source' }
+            'msstore' { 'https://storeedgefd.dsx.mp.microsoft.com/v9.0' }
+            default { 'https://example.com/source' }
+        }
+        
+        $sources += @{
+            Packages = $pkgArray
+            SourceDetails = @{
+                Argument = $sourceUrl
+                Identifier = "Microsoft.Winget.Source_$sourceName"
+                Name = $sourceName
+                Type = 'Microsoft.PreIndexed.Package'
+            }
+        }
+    }
+    
+    $jsonObj = @{
+        '$schema' = 'https://aka.ms/winget-packages.schema.2.0.json'
+        CreationDate = '2024-01-15T10:30:00Z'
+        Sources = $sources
+        WinGetVersion = '1.6.3133'
+    }
+    
+    $jsonOutput = $jsonObj | ConvertTo-Json -Depth 10
+    
+    Mock Invoke-Expression {
+        if ($_ -match 'winget export.*-o\s+(\S+)') {
+            $matches[1] | Out-File -FilePath $matches[1] -Encoding utf8
+        }
+        return $jsonOutput
+    } -ParameterFilter { $_ -match "winget export" }
 }
 
 # =============================================================================
@@ -312,6 +403,7 @@ Export-ModuleMember -Function @(
     'Mock-WingetExportWithApps',
     'Mock-WingetExportEmpty',
     'Mock-WingetExportWithGitAndVSCode',
+    'Mock-WingetExportWithSources',
     'Mock-WingetInstallSuccess',
     'Mock-WingetInstallFailure',
     'Mock-WingetInstallAlreadyInstalled',

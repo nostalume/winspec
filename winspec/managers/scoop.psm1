@@ -2,6 +2,7 @@
 
 # Import dependent modules
 Import-Module (Join-Path $PSScriptRoot "..\logging.psm1") -Force
+Import-Module (Join-Path $PSScriptRoot "..\utils.psm1") -Force
 
 function Get-ProviderInfo {
     return @{
@@ -39,24 +40,62 @@ For more information: https://scoop.sh
 
 function Invoke-ScoopCommand {
     <#
-    .SYNOPSIS
-        Internal wrapper to invoke scoop commands for testability.
-    .DESCRIPTION
-        Wraps scoop command calls to allow for mocking in tests.
-    #>
+.SYNOPSIS
+    Internal wrapper to invoke scoop commands.
+
+.DESCRIPTION
+    Executes scoop in a separate PowerShell process for isolation
+    and improved testability.
+
+.PARAMETER Command
+    Scoop command (install, list, update, etc).
+
+.PARAMETER Arguments
+    Additional arguments passed to scoop.
+
+.OUTPUTS
+    Command stdout as string.
+#>
+
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory = $true, Position = 0)]
+        [Parameter(Mandatory, Position = 0)]
         [string]$Command,
-        
-        [Parameter(ValueFromRemainingArguments = $true)]
+
+        [Parameter(ValueFromRemainingArguments)]
         [string[]]$Arguments
     )
-    
-    $argString = if ($Arguments) { $Arguments -join ' ' } else { '' }
-    $fullCommand = if ($argString) { "scoop $Command $argString" } else { "scoop $Command" }
-    
-    return Invoke-Expression $fullCommand 2>$null
+
+    $cmdArgs = @($Command)
+    if ($Arguments) {
+        $cmdArgs += $Arguments
+    }
+
+    # Proper argument quoting
+    $escaped = $cmdArgs | ForEach-Object {
+        '"' + ($_ -replace '"', '\"') + '"'
+    }
+
+    $psi = [System.Diagnostics.ProcessStartInfo]::new()
+    $psi.FileName = "powershell"
+    $psi.Arguments = "-NoProfile -Command scoop $($escaped -join ' ')"
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+
+    $process = [System.Diagnostics.Process]::Start($psi)
+
+    $stdout = $process.StandardOutput.ReadToEnd()
+    $stderr = $process.StandardError.ReadToEnd()
+
+    $process.WaitForExit()
+
+    if ($process.ExitCode -ne 0) {
+        Write-Log -Level WARNING -Message "Scoop exited with code $($process.ExitCode): $stderr"
+    }
+
+    return $stdout
 }
 
 function Get-ScoopExport {
@@ -80,7 +119,7 @@ function Get-ScoopExport {
         
         if ([string]::IsNullOrWhiteSpace($exportJson)) {
             return @{
-                apps = @()
+                apps    = @()
                 buckets = @()
             }
         }
@@ -92,14 +131,14 @@ function Get-ScoopExport {
         $buckets = if ($export.buckets) { @($export.buckets) } else { @() }
         
         return @{
-            apps = $apps
+            apps    = $apps
             buckets = $buckets
         }
     }
     catch {
         Write-Log -Level "ERROR" -Message "Failed to parse Scoop export: $($_.Exception.Message)"
         return @{
-            apps = @()
+            apps    = @()
             buckets = @()
         }
     }
@@ -305,17 +344,15 @@ function Export-ScoopState {
     
     $export = Get-ScoopExport
     
-    # Build buckets array (persistent fields only)
-    $buckets = @()
+    $buckets = [System.Collections.ArrayList]::new()
     foreach ($bucket in $export.buckets) {
-        $buckets += @{
-            Name = $bucket.name
-            Source = $bucket.source
-        }
+        [void]$buckets.Add(@{
+                Name   = $bucket.name
+                Source = $bucket.source
+            })
     }
     
-    # Build apps array (persistent fields only)
-    $apps = @()
+    $apps = [System.Collections.ArrayList]::new()
     foreach ($app in $export.apps) {
         $appEntry = @{
             Name = $app.name
@@ -332,26 +369,20 @@ function Export-ScoopState {
             $appEntry.Architecture = $app.architecture
         }
         
-        $apps += $appEntry
+        [void]$apps.Add($appEntry)
     }
     
-    # Build result - support both simple and extended formats
+    # Build result - unified format
     $result = @{}
     
     if ($buckets.Count -gt 0) {
-        $result.Buckets = $buckets
+        $result.Buckets = $buckets.ToArray()
     }
     
     if ($apps.Count -gt 0) {
-        # Use simple array format if no version/bucket info needed
-        $simpleNames = $apps | ForEach-Object { $_.Name }
-        $result.Installed = $simpleNames
-        
-        # Also include detailed format if any app has extra metadata
-        $hasDetailedInfo = $apps | Where-Object { $_.Count -gt 1 }
-        if ($hasDetailedInfo) {
-            $result.Apps = $apps
-        }
+        # Always include Packages for consistency
+        # $result.Installed = $apps | ForEach-Object { $_.Name }
+        $result.Packages = $apps.ToArray()
     }
     
     return $result
@@ -380,65 +411,68 @@ function Compare-ScoopState {
         [hashtable]$Desired
     )
     
-    $differences = @()
+    $differences = [System.Collections.ArrayList]::new()
     
     # Get package lists (handle both simple and extended format)
     $systemPackages = if ($System.Installed) { 
         $System.Installed | ForEach-Object { Get-PackageName -Package $_ }
-    } else { @() }
+    }
+    else { @() }
     
     $desiredPackages = if ($Desired.Installed) { 
         $Desired.Installed | ForEach-Object { Get-PackageName -Package $_ }
-    } else { @() }
+    }
+    else { @() }
     
     # Find added packages (in desired, not in system)
     foreach ($package in $desiredPackages) {
         if ($package -notin $systemPackages) {
-            $differences += @{
-                Type = "Added"
-                Path = "Scoop.$package"
-                SystemValue = $null
-                ConfigValue = $package
-            }
+            [void]$differences.Add(@{
+                    Type        = "Added"
+                    Path        = "Scoop.$package"
+                    SystemValue = $null
+                    ConfigValue = $package
+                })
         }
     }
     
     # Find removed packages (in system, not in desired)
     foreach ($package in $systemPackages) {
         if ($package -notin $desiredPackages) {
-            $differences += @{
-                Type = "Removed"
-                Path = "Scoop.$package"
-                SystemValue = $package
-                ConfigValue = $null
-            }
+            [void]$differences.Add(@{
+                    Type        = "Removed"
+                    Path        = "Scoop.$package"
+                    SystemValue = $package
+                    ConfigValue = $null
+                })
         }
     }
     
-    # Find existing packages (for version comparison if Apps data available)
-    $systemApps = if ($System.Apps) { $System.Apps } else { @() }
-    $desiredApps = if ($Desired.Apps) { $Desired.Apps } else { @() }
+    # Find existing packages (for version comparison if Packages data available)
+    $systemPackages = if ($System.Packages) { $System.Packages } else { @() }
+    $desiredPackages = if ($Desired.Packages) { $Desired.Packages } else { @() }
     
-    foreach ($desiredApp in $desiredApps) {
-        $systemApp = $systemApps | Where-Object { $_.Name -eq $desiredApp.Name }
-        if ($systemApp) {
-            # Check for version mismatch
-            if ($desiredApp.Version -and $systemApp.Version -ne $desiredApp.Version) {
-                $differences += @{
-                    Type = "Changed"
-                    Path = "Scoop.$($desiredApp.Name)"
-                    SystemValue = @{ Version = $systemApp.Version }
-                    ConfigValue = @{ Version = $desiredApp.Version }
-                }
-            }
-            else {
-                $differences += @{
-                    Type = "Equal"
-                    Path = "Scoop.$($desiredApp.Name)"
-                    SystemValue = $systemApp
-                    ConfigValue = $desiredApp
-                }
-            }
+    foreach ($desiredPkg in $desiredPackages) {
+        $systemPkg = $systemPackages | Where-Object { $_.Name -eq $desiredPkg.Name }
+        if (-Not $systemPkg) {
+            continue
+        }
+        # Check for version mismatch
+        if ($desiredPkg.Version -and $systemPkg.Version -ne $desiredPkg.Version) {
+            [void]$differences.Add(@{
+                    Type        = "Changed"
+                    Path        = "Scoop.$($desiredPkg.Name)"
+                    SystemValue = @{ Version = $systemPkg.Version }
+                    ConfigValue = @{ Version = $desiredPkg.Version }
+                })
+        }
+        else {
+            [void]$differences.Add(@{
+                    Type        = "Equal"
+                    Path        = "Scoop.$($desiredPkg.Name)"
+                    SystemValue = $systemPkg
+                    ConfigValue = $desiredPkg
+                })
         }
     }
     
@@ -449,16 +483,55 @@ function Compare-ScoopState {
     foreach ($bucket in $desiredBuckets) {
         $systemBucket = $systemBuckets | Where-Object { $_.Name -eq $bucket.Name }
         if (-not $systemBucket) {
-            $differences += @{
-                Type = "Added"
-                Path = "Scoop.Buckets.$($bucket.Name)"
-                SystemValue = $null
-                ConfigValue = $bucket
-            }
+            [void]$differences.Add(@{
+                    Type        = "Added"
+                    Path        = "Scoop.Buckets.$($bucket.Name)"
+                    SystemValue = $null
+                    ConfigValue = $bucket
+                })
         }
     }
     
-    return $differences
+    return $differences.ToArray()
+}
+
+function Merge-ScoopState {
+    <#
+    .SYNOPSIS
+        Merges system Scoop state with existing config.
+    .DESCRIPTION
+        Uses shared merge utilities for efficiency. Prefers existing config
+        for buckets to preserve user customizations.
+    .PARAMETER SystemState
+        Hashtable with Installed, Packages, and/or Buckets arrays from system
+    .PARAMETER ExistingConfig
+        Hashtable with Installed, Packages, and/or Buckets arrays from config
+    .OUTPUTS
+        Hashtable with merged state
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [hashtable]$SystemState,
+        
+        [Parameter(Mandatory = $true)]
+        [hashtable]$ExistingConfig
+    )
+    
+    # Use generic package merge
+    $result = Merge-PackageState -SystemState $SystemState -SpecState $ExistingConfig
+    
+    # Use generic bucket merge
+    $mergedBuckets = Merge-SourceCollection `
+        -SystemSources $SystemState.Buckets `
+        -ExistingSources $ExistingConfig.Buckets `
+        -NameKey "Name"
+    
+    if ($mergedBuckets.Count -gt 0) {
+        $result.Buckets = $mergedBuckets
+    }
+    
+    return $result
 }
 
 function Get-ScoopMockState {
@@ -478,14 +551,14 @@ function Get-ScoopMockState {
     if (Test-SandboxActive) {
         $state = Get-SandboxState -Provider "Scoop"
         return @{
-            apps = $state.apps
+            apps    = $state.apps
             buckets = $state.buckets
         }
     }
     
     # Not in sandbox - return empty default
     return @{
-        apps = @()
+        apps    = @()
         buckets = @()
     }
 }
@@ -547,9 +620,9 @@ function Invoke-ScoopSandboxApply {
     }
     
     $results = @{
-        Status = "Success"
-        Installed = @()
-        Removed = @()
+        Status           = "Success"
+        Installed        = @()
+        Removed          = @()
         AlreadyInstalled = @()
     }
     
@@ -557,9 +630,9 @@ function Invoke-ScoopSandboxApply {
     foreach ($package in $desiredApps) {
         if ($package -notin $currentApps) {
             $currentState.apps += @{
-                name = $package
+                name    = $package
                 version = "latest"
-                bucket = "main"
+                bucket  = "main"
             }
             $results.Installed += $package
         }
@@ -600,6 +673,7 @@ Export-ModuleMember -Function @(
     "Set-ScoopState"
     "Export-ScoopState"
     "Compare-ScoopState"
+    "Merge-ScoopState"
     "Get-ScoopMockState"
     "Set-ScoopMockState"
     "Invoke-ScoopSandboxApply"

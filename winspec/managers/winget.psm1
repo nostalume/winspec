@@ -1,7 +1,8 @@
-# managers/winget.psm1 - Declarative Winget package management provider
+# managers/winget.psm1 - Declarative WinGet package management provider
 
 # Import dependent modules
 Import-Module (Join-Path $PSScriptRoot "..\logging.psm1") -Force
+Import-Module (Join-Path $PSScriptRoot "..\utils.psm1") -Force
 
 function Get-ProviderInfo {
     return @{
@@ -13,20 +14,21 @@ function Get-ProviderInfo {
 function Test-WingetInstalled {
     <#
     .SYNOPSIS
-        Verifies winget (Windows Package Manager) is installed and available.
+        Verifies Winget is installed and available.
     .DESCRIPTION
-        Checks if winget command is available. Throws an error if not installed.
+        Checks if Winget command is available. Throws an error if not installed.
     #>
     [CmdletBinding()]
     param()
     
-    if ($null -eq (Get-Command winget -ErrorAction SilentlyContinue)) {
+    $wingetCmd = Get-Command winget -ErrorAction SilentlyContinue
+    
+    if ($null -eq $wingetCmd) {
         throw @"
-Winget is not installed. Please install Windows Package Manager first:
+WinGet is not installed. Please install it from the Microsoft Store:
+  https://apps.microsoft.com/store/detail/app-installer/9NBLGGH4NNS1
 
-  https://github.com/microsoft/winget-cli#installing-the-cli
-
-Or update your Windows 10/11 to the latest version which includes winget.
+Or enable it via Settings > Apps > Optional features.
 "@
     }
     
@@ -36,9 +38,10 @@ Or update your Windows 10/11 to the latest version which includes winget.
 function Invoke-WingetCommand {
     <#
     .SYNOPSIS
-        Internal wrapper to invoke winget commands for testability.
+        Internal wrapper to invoke winget commands.
     .DESCRIPTION
-        Wraps winget command calls to allow for mocking in tests.
+        Wraps winget command calls for testability. Uses Start-Process for
+        secure command execution instead of Invoke-Expression.
     #>
     [CmdletBinding()]
     param(
@@ -49,20 +52,138 @@ function Invoke-WingetCommand {
         [string[]]$Arguments
     )
     
-    $argString = if ($Arguments) { $Arguments -join ' ' } else { '' }
-    $fullCommand = if ($argString) { "winget $Command $argString" } else { "winget $Command" }
+    # Build command arguments
+    $cmdArgs = @($Command)
+    if ($Arguments) {
+        $cmdArgs += $Arguments
+    }
     
-    return Invoke-Expression $fullCommand 2>$null
+    # Debug output
+    Write-Debug "Invoking: winget $($cmdArgs -join ' ')"
+    
+    # Use Start-Process for secure execution
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = 'winget'
+    $psi.Arguments = $cmdArgs -join ' '
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.CreateNoWindow = $true
+    
+    $process = [System.Diagnostics.Process]::Start($psi)
+    
+    # Read output with async to avoid potential deadlock
+    $stdout = $process.StandardOutput.ReadToEnd()
+    $stderr = $process.StandardError.ReadToEnd()
+    $process.WaitForExit()
+    
+    # Debug output
+    Write-Debug "Exit code: $($process.ExitCode)"
+    if ($stdout) { Write-Debug "STDOUT: $stdout" }
+    if ($stderr) { Write-Debug "STDERR: $stderr" }
+    
+    # Log any errors or non-zero exit codes
+    if ($process.ExitCode -ne 0) {
+        Write-Debug "Winget command exited with non-zero code: $($process.ExitCode)"
+        if ($stderr) {
+            Write-Log -Level "WARNING" -Message "Winget command exited with code $($process.ExitCode): $stderr"
+        }
+    }
+    
+    return $stdout
+}
+
+# Helper function to extract packages from winget export
+function Parse-WingetExportJson {
+    <#
+    .SYNOPSIS
+        Parses winget export JSON and extracts packages and sources.
+    .PARAMETER JsonContent
+        Raw JSON content from winget export
+    .OUTPUTS
+        Hashtable with Packages and Sources arrays
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$JsonContent
+    )
+    
+    Write-Debug "Parse-WingetExportJson called with content length: $($JsonContent.Length)"
+    
+    if ([string]::IsNullOrWhiteSpace($JsonContent)) {
+        Write-Debug "JsonContent is null or whitespace, returning empty"
+        return @{
+            Packages = @()
+            Sources = @()
+        }
+    }
+    
+    $export = $JsonContent | ConvertFrom-Json -ErrorAction Stop
+    Write-Debug "JSON parsed successfully. WinGetVersion: $($export.WinGetVersion), CreationDate: $($export.CreationDate)"
+    
+    # Use ArrayList for O(1) append performance
+    $packages = [System.Collections.ArrayList]::new()
+    $sources = [System.Collections.ArrayList]::new()
+    
+    # Early return if no sources
+    if (-not $export.Sources -or $export.Sources.Count -eq 0) {
+        Write-Debug "No sources found in export, returning empty packages"
+        return @{
+            Packages = @()
+            Sources = @()
+            WinGetVersion = $export.WinGetVersion
+            CreationDate = $export.CreationDate
+        }
+    }
+    
+    Write-Debug "Found $($export.Sources.Count) sources in export"
+    
+    # Process sources - flat loop, no nesting
+    foreach ($source in $export.Sources) {
+        $sourceName = $source.SourceDetails.Name
+        $sourceArg = $source.SourceDetails.Argument
+        
+        Write-Debug "Processing source: $sourceName"
+        
+        [void]$sources.Add(@{
+            Name = $sourceName
+            Argument = $sourceArg
+        })
+        
+        # Extract packages from this source
+        if ($source.Packages -and $source.Packages.Count -gt 0) {
+            Write-Debug "Source $sourceName has $($source.Packages.Count) packages"
+            foreach ($pkg in $source.Packages) {
+                [void]$packages.Add(@{
+                    Name = $pkg.PackageIdentifier
+                    Source = $sourceName
+                })
+            }
+        }
+        else {
+            Write-Debug "Source $sourceName has NO packages"
+        }
+    }
+    
+    Write-Debug "Final result: $($packages.Count) packages, $($sources.Count) sources"
+    
+    return @{
+        Packages = $packages.ToArray()
+        Sources = $sources.ToArray()
+        WinGetVersion = $export.WinGetVersion
+        CreationDate = $export.CreationDate
+    }
 }
 
 function Get-WingetExport {
     <#
     .SYNOPSIS
-        Gets the current Winget state by querying installed packages.
+        Gets the current Winget state as a hashtable from JSON export.
     .DESCRIPTION
-        Runs 'winget list' and parses the output to get installed packages.
+        Runs 'winget export' and parses the JSON output to get installed
+        packages and their sources.
     .OUTPUTS
-        Hashtable with 'packages' array
+        Hashtable with 'Packages' and 'Sources' arrays
     #>
     [CmdletBinding()]
     param()
@@ -70,68 +191,48 @@ function Get-WingetExport {
     # Ensure Winget is installed first
     Test-WingetInstalled | Out-Null
     
+    # Use a temp file for winget export output
+    $tempFile = [System.IO.Path]::GetTempFileName() + ".json"
+    Write-Debug "Temp file: $tempFile"
+    
     try {
-        # winget list --accept-source-agreements to avoid prompts
-        $listOutput = Invoke-WingetCommand -Command "list" -Arguments "--accept-source-agreements"
+        # Run winget export with accept-source-agreements to avoid prompts
+        # Fixed: Remove incorrect backtick escaping around temp file path
+        $null = Invoke-WingetCommand -Command "export" -Arguments @("-o", $tempFile, "--accept-source-agreements")
         
-        if ([string]::IsNullOrWhiteSpace($listOutput)) {
+        # Debug: Check if file was created
+        Write-Debug "Checking for temp file existence..."
+        
+        # Guard clause: check if file was created
+        if (-not (Test-Path $tempFile)) {
+            Write-Debug "Temp file was NOT created - winget export may have failed silently"
             return @{
-                packages = @()
+                Packages = @()
+                Sources = @()
             }
         }
         
-        # Parse winget list output - it returns a table format
-        # Header line starts with "Name"
-        $lines = $listOutput -split "`n" | Where-Object { $_.Trim() -ne "" }
+        Write-Debug "Temp file exists, reading content..."
         
-        $packages = @()
+        # Read and parse the JSON using helper function
+        $jsonContent = Get-Content $tempFile -Raw -ErrorAction SilentlyContinue
+        Write-Debug "JSON content length: $($jsonContent.Length)"
+        Write-Debug "JSON content preview: $($jsonContent.Substring(0, [Math]::Min(200, $jsonContent.Length)))"
         
-        # Find the header line and parse from there
-        $startIndex = -1
-        for ($i = 0; $i -lt $lines.Count; $i++) {
-            if ($lines[$i] -match "^\s*Name\s+Id") {
-                $startIndex = $i + 1
-                break
-            }
-        }
-        
-        if ($startIndex -ge 0 -and $startIndex -lt $lines.Count) {
-            for ($i = $startIndex; $i -lt $lines.Count; $i++) {
-                $line = $lines[$i]
-                # Skip separator lines (----)
-                if ($line -match "^-+\s+-+\s+-") {
-                    continue
-                }
-                
-                # Parse line: Name                    Id                           Version      Available
-                # We need to extract the package name and id
-                if ($line -match "^\s*(.+?)\s+([^\s]+)\s+([^\s]+)") {
-                    $name = $matches[1].Trim()
-                    $id = $matches[2].Trim()
-                    $version = $matches[3].Trim()
-                    
-                    # Skip header-like entries
-                    if ($name -eq "Name" -or $id -eq "Id") {
-                        continue
-                    }
-                    
-                    $packages += @{
-                        Name = $name
-                        Id = $id
-                        Version = $version
-                    }
-                }
-            }
-        }
-        
-        return @{
-            packages = $packages
-        }
+        return Parse-WingetExportJson -JsonContent $jsonContent
     }
     catch {
-        Write-Log -Level "ERROR" -Message "Failed to get Winget packages: $($_.Exception.Message)"
+        Write-Log -Level "ERROR" -Message "Failed to get Winget export: $($_.Exception.Message)"
+        Write-Debug "Exception details: $($_.Exception.Message)"
         return @{
-            packages = @()
+            Packages = @()
+            Sources = @()
+        }
+    }
+    finally {
+        # Clean up temp file
+        if (Test-Path $tempFile) {
+            Remove-Item $tempFile -Force -ErrorAction SilentlyContinue
         }
     }
 }
@@ -139,15 +240,15 @@ function Get-WingetExport {
 function Get-InstalledWingetPackages {
     <#
     .SYNOPSIS
-        Gets the list of installed package IDs.
+        Gets the list of installed package names.
     .DESCRIPTION
-        Uses winget list to return just the package IDs.
+        Uses Winget export to return just the package names.
     #>
     [CmdletBinding()]
     param()
     
     $export = Get-WingetExport
-    return @($export.packages | Select-Object -ExpandProperty Id -ErrorAction SilentlyContinue)
+    return @($export.Packages | Select-Object -ExpandProperty Name -ErrorAction SilentlyContinue)
 }
 
 function Get-WingetPackageInfo {
@@ -155,28 +256,28 @@ function Get-WingetPackageInfo {
     .SYNOPSIS
         Gets detailed information about an installed package.
     .DESCRIPTION
-        Returns metadata about a package from the winget list.
+        Returns metadata about a package from the Winget export.
     #>
     [CmdletBinding()]
-    param (
+    param(
         [Parameter(Mandatory = $true)]
-        [string]$PackageId
+        [string]$PackageName
     )
     
     $export = Get-WingetExport
-    return $export.packages | Where-Object { $_.Id -eq $PackageId }
+    return $export.Packages | Where-Object { $_.Name -eq $PackageName }
 }
 
-function Get-PackageName {
+function Get-PackageIdentifier {
     <#
     .SYNOPSIS
-        Extracts package name/id from various input formats.
+        Extracts package identifier from various input formats.
     .DESCRIPTION
         Handles both simple string format and extended hashtable format with flags.
     .PARAMETER Package
-        Package id (string) or package object with Name and optional Flags
+        Package name (string) or package object with Name and optional Version/Source
     .OUTPUTS
-        Package id string
+        Package identifier string
     #>
     param(
         [Parameter(Mandatory = $true)]
@@ -184,9 +285,31 @@ function Get-PackageName {
     )
     
     if ($Package -is [hashtable]) {
-        return $Package.Name  # Using Name field as the package id for winget
+        return $Package.Name
     }
     return $Package
+}
+
+function Get-PackageVersion {
+    <#
+    .SYNOPSIS
+        Extracts version from package object.
+    .DESCRIPTION
+        Returns version string if package is hashtable with Version property.
+    .PARAMETER Package
+        Package name (string) or package object with Name and optional Version
+    .OUTPUTS
+        Version string (may be empty)
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        $Package
+    )
+    
+    if ($Package -is [hashtable] -and $Package.Version) {
+        return $Package.Version
+    }
+    return ""
 }
 
 function Get-PackageFlags {
@@ -196,7 +319,7 @@ function Get-PackageFlags {
     .DESCRIPTION
         Returns flags string if package is hashtable with Flags property, otherwise empty string.
     .PARAMETER Package
-        Package id (string) or package object with Name and optional Flags
+        Package name (string) or package object with Name and optional Flags
     .OUTPUTS
         Flags string (may be empty)
     #>
@@ -216,11 +339,11 @@ function Test-WingetState {
     .SYNOPSIS
         Tests if all desired packages are installed.
     .DESCRIPTION
-        Compares the desired package list against winget's exported state.
-        Supports both simple strings and extended hashtables with flags.
+        Compares the desired package list against Winget's exported state.
+        Supports both simple strings and extended hashtables with Version/Source.
     #>
     [CmdletBinding()]
-    param (
+    param(
         [Parameter(Mandatory = $true)]
         [hashtable]$Desired
     )
@@ -232,8 +355,8 @@ function Test-WingetState {
     $installed = Get-InstalledWingetPackages
     
     foreach ($package in $Desired.Installed) {
-        $pkgId = Get-PackageName -Package $package
-        if ($pkgId -notin $installed) {
+        $pkgName = Get-PackageIdentifier -Package $package
+        if ($pkgName -notin $installed) {
             return $false
         }
     }
@@ -246,18 +369,18 @@ function Set-WingetState {
     .SYNOPSIS
         Installs packages that are not already present.
     .DESCRIPTION
-        Uses winget list to determine current state and installs
-        only the packages that are missing. Supports per-package flags.
+        Uses Winget export to determine current state and installs
+        only the packages that are missing.
     #>
     [CmdletBinding(SupportsShouldProcess = $true)]
-    param (
+    param(
         [Parameter(Mandatory = $true)]
         [hashtable]$Desired
     )
     
     $results = @{}
     
-    # Verify Winget is installed - this will throw if not
+    # Verify Winget is installed
     try {
         Test-WingetInstalled | Out-Null
     }
@@ -271,41 +394,49 @@ function Set-WingetState {
         return $results
     }
     
-    # Get current state once from winget list
+    # Get current state once from winget export
     $installed = Get-InstalledWingetPackages
     
     foreach ($package in $Desired.Installed) {
-        $pkgId = Get-PackageName -Package $package
+        $pkgName = Get-PackageIdentifier -Package $package
+        $pkgVersion = Get-PackageVersion -Package $package
         $pkgFlags = Get-PackageFlags -Package $package
         
-        if ($pkgId -in $installed) {
-            Write-LogOk -Name $pkgId -DesiredValue "installed"
-            $results[$pkgId] = @{ Status = "AlreadyInstalled" }
+        if ($pkgName -in $installed) {
+            Write-LogOk -Name $pkgName -DesiredValue "installed"
+            $results[$pkgName] = @{ Status = "AlreadyInstalled"; Version = $pkgVersion }
             continue
         }
         
-        Write-LogChange -Name $pkgId -CurrentValue "not installed" -DesiredValue "installed"
+        Write-LogChange -Name $pkgName -CurrentValue "not installed" -DesiredValue "installed"
         
-        if ($PSCmdlet.ShouldProcess($pkgId, "Install package")) {
+        if ($PSCmdlet.ShouldProcess($pkgName, "Install package")) {
             try {
-                # Build arguments: package id followed by any flags
-                $args = @($pkgId)
-                if ($pkgFlags) {
-                    # Parse flags string into separate arguments
-                    $args += $pkgFlags -split '\s+'
+                # Build install arguments - use ID directly (winget accepts full ID like Git.Git)
+                $inputs = @("install", "--id", $pkgName, "--accept-source-agreements", "--accept-package-agreements")
+                
+                # Add version if specified
+                if ($pkgVersion) {
+                    $inputs += @("--version", $pkgVersion)
                 }
                 
-                Invoke-WingetCommand -Command "install" -Arguments $args | Out-Null
-                Write-LogApplied -Name $pkgId -DesiredValue "installed"
-                $results[$pkgId] = @{ Status = "Installed"; Flags = $pkgFlags }
+                # Add custom flags if specified
+                if ($pkgFlags) {
+                    $inputs += $pkgFlags -split ' '
+                }
+                
+                Invoke-WingetCommand -Command $inputs[0] -Arguments $inputs[1..($inputs.Length - 1)] | Out-Null
+                
+                Write-LogApplied -Name $pkgName -DesiredValue "installed"
+                $results[$pkgName] = @{ Status = "Installed"; Version = $pkgVersion; Flags = $pkgFlags }
             }
             catch {
-                Write-LogError -Name $pkgId -Details $_.Exception.Message
-                $results[$pkgId] = @{ Status = "Error"; Message = $_.Exception.Message }
+                Write-LogError -Name $pkgName -Details $_.Exception.Message
+                $results[$pkgName] = @{ Status = "Error"; Message = $_.Exception.Message }
             }
         }
         else {
-            $results[$pkgId] = @{ Status = "DryRun" }
+            $results[$pkgName] = @{ Status = "DryRun" }
         }
     }
     
@@ -317,13 +448,14 @@ function Export-WingetState {
     .SYNOPSIS
         Exports the current package state for bidirectional sync.
     .DESCRIPTION
-        Captures the current Winget state (packages) in a format
-        suitable for WinSpec configuration.
+        Captures the current Winget state in a format suitable for WinSpec configuration.
     .OUTPUTS
         Hashtable with Installed array
     #>
     [CmdletBinding()]
     param()
+    
+    Write-Debug "Export-WingetState: Starting export..."
     
     # Ensure Winget is installed
     try {
@@ -331,40 +463,51 @@ function Export-WingetState {
     }
     catch {
         Write-Log -Level "ERROR" -Message "Cannot export: Winget is not installed"
+        Write-Debug "Export-WingetState: Winget not installed error"
         return $null
     }
     
+    Write-Debug "Export-WingetState: Getting winget export..."
     $export = Get-WingetExport
     
-    # Build packages array
-    $packages = @()
-    foreach ($pkg in $export.packages) {
+    Write-Debug "Export-WingetState: Got export with $($export.Packages.Count) packages, $($export.Sources.Count) sources"
+    
+    # Build packages array using ArrayList for O(1) append
+    $packages = [System.Collections.ArrayList]::new()
+    foreach ($pkg in $export.Packages) {
         $pkgEntry = @{
-            Name = $pkg.Id  # Use Id as the primary identifier for winget
+            Name = $pkg.Name
         }
         
-        # Add optional fields if present
+        # Add source if available (for tracking where package came from)
+        if ($pkg.Source) {
+            $pkgEntry.Source = $pkg.Source
+        }
+        
+        # Add version if available
         if ($pkg.Version) {
             $pkgEntry.Version = $pkg.Version
         }
         
-        $packages += $pkgEntry
+        [void]$packages.Add($pkgEntry)
     }
     
-    # Build result - use simple array format with just package IDs
+    # Build result
     $result = @{}
     
-    if ($packages.Count -gt 0) {
-        # Use simple array format if no version info needed
-        $simpleIds = $packages | ForEach-Object { $_.Name }
-        $result.Installed = $simpleIds
-        
-        # Also include detailed format if any package has extra metadata
-        $hasDetailedInfo = $packages | Where-Object { $_.Count -gt 1 }
-        if ($hasDetailedInfo) {
-            $result.Packages = $packages
-        }
+    # Include sources if available
+    if ($export.Sources -and $export.Sources.Count -gt 0) {
+        $result.Sources = $export.Sources
     }
+    
+    if ($packages.Count -gt 0) {
+        # Always include Packages for consistency
+        $result.Installed = $packages | ForEach-Object { $_.Name }
+        $result.Packages = $packages.ToArray()
+    }
+    
+    Write-Debug "Export-WingetState: Returning result with $($result.Count) keys"
+    Write-Debug "Export-WingetState: Result keys = $($result.Keys -join ', ')"
     
     return $result
 }
@@ -375,13 +518,13 @@ function Compare-WingetState {
         Compares system package state with desired configuration.
     .DESCRIPTION
         Compares current Winget state with a desired configuration and
-        returns differences (added, removed, changed packages).
+        returns differences.
     .PARAMETER System
         Current system state (from Export-WingetState)
     .PARAMETER Desired
         Desired configuration state
     .OUTPUTS
-        Array of difference objects with Type, Path, SystemValue, ConfigValue
+        Array of difference objects
     #>
     [CmdletBinding()]
     param(
@@ -392,209 +535,112 @@ function Compare-WingetState {
         [hashtable]$Desired
     )
     
-    $differences = @()
+    $differences = [System.Collections.ArrayList]::new()
     
     # Get package lists (handle both simple and extended format)
     $systemPackages = if ($System.Installed) { 
-        $System.Installed | ForEach-Object { Get-PackageName -Package $_ }
+        $System.Installed | ForEach-Object { Get-PackageIdentifier -Package $_ }
     } else { @() }
     
     $desiredPackages = if ($Desired.Installed) { 
-        $Desired.Installed | ForEach-Object { Get-PackageName -Package $_ }
+        $Desired.Installed | ForEach-Object { Get-PackageIdentifier -Package $_ }
     } else { @() }
     
     # Find added packages (in desired, not in system)
     foreach ($package in $desiredPackages) {
         if ($package -notin $systemPackages) {
-            $differences += @{
+            [void]$differences.Add(@{
                 Type = "Added"
                 Path = "Winget.$package"
                 SystemValue = $null
                 ConfigValue = $package
-            }
+            })
         }
     }
     
     # Find removed packages (in system, not in desired)
     foreach ($package in $systemPackages) {
         if ($package -notin $desiredPackages) {
-            $differences += @{
+            [void]$differences.Add(@{
                 Type = "Removed"
                 Path = "Winget.$package"
                 SystemValue = $package
                 ConfigValue = $null
-            }
+            })
         }
     }
     
-    # Find existing packages (for version comparison if Packages data available)
-    $systemPkgs = if ($System.Packages) { $System.Packages } else { @() }
-    $desiredPkgs = if ($Desired.Packages) { $Desired.Packages } else { @() }
+    # Check sources
+    $systemSources = if ($System.Sources) { $System.Sources } else { @() }
+    $desiredSources = if ($Desired.Sources) { $Desired.Sources } else { @() }
     
-    foreach ($desiredPkg in $desiredPkgs) {
-        $systemPkg = $systemPkgs | Where-Object { $_.Name -eq $desiredPkg.Name }
-        if ($systemPkg) {
-            # Check for version mismatch
-            if ($desiredPkg.Version -and $systemPkg.Version -ne $desiredPkg.Version) {
-                $differences += @{
-                    Type = "Changed"
-                    Path = "Winget.$($desiredPkg.Name)"
-                    SystemValue = @{ Version = $systemPkg.Version }
-                    ConfigValue = @{ Version = $desiredPkg.Version }
-                }
-            }
-            else {
-                $differences += @{
-                    Type = "Equal"
-                    Path = "Winget.$($desiredPkg.Name)"
-                    SystemValue = $systemPkg
-                    ConfigValue = $desiredPkg
-                }
-            }
+    foreach ($source in $desiredSources) {
+        $systemSource = $systemSources | Where-Object { $_.Name -eq $source.Name }
+        if (-not $systemSource) {
+            [void]$differences.Add(@{
+                Type = "Added"
+                Path = "Winget.Sources.$($source.Name)"
+                SystemValue = $null
+                ConfigValue = $source
+            })
         }
     }
     
-    return $differences
+    return $differences.ToArray()
 }
 
-function Get-WingetMockState {
+function Merge-WingetState {
     <#
     .SYNOPSIS
-        Gets the package mock state from sandbox.
+        Merges system Winget state with existing config.
     .DESCRIPTION
-        Returns the current package state from the sandbox context.
+        Uses shared merge utilities for efficiency. Prefers existing config
+        for sources to preserve user customizations.
+    .PARAMETER SystemState
+        Hashtable with Installed, Packages, and/or Sources arrays from system
+    .PARAMETER ExistingConfig
+        Hashtable with Installed, Packages, and/or Sources arrays from config
     .OUTPUTS
-        Hashtable with packages array
-    #>
-    [CmdletBinding()]
-    param()
-    
-    Import-Module (Join-Path $PSScriptRoot "..\sandbox.psm1") -Force -ErrorAction SilentlyContinue
-    
-    if (Test-SandboxActive) {
-        $state = Get-SandboxState -Provider "Winget"
-        return @{
-            packages = $state.packages
-        }
-    }
-    
-    # Not in sandbox - return empty default
-    return @{
-        packages = @()
-    }
-}
-
-function Set-WingetMockState {
-    <#
-    .SYNOPSIS
-        Sets the package mock state in sandbox.
-    .DESCRIPTION
-        Updates the current package state in the sandbox context.
-    .PARAMETER State
-        Hashtable with packages array
+        Hashtable with merged state
     #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
-        [hashtable]$State
-    )
-    
-    Import-Module (Join-Path $PSScriptRoot "..\sandbox.psm1") -Force -ErrorAction SilentlyContinue
-    
-    if (Test-SandboxActive) {
-        Set-SandboxState -Provider "Winget" -State $State
-    }
-}
-
-function Invoke-WingetSandboxApply {
-    <#
-    .SYNOPSIS
-        Applies package state changes in sandbox mode.
-    .DESCRIPTION
-        Simulates package installation/removal in the sandbox context.
-    .PARAMETER Desired
-        Desired package state hashtable
-    .OUTPUTS
-        Hashtable with Status, Installed, Removed arrays
-    #>
-    [CmdletBinding()]
-    param(
+        [hashtable]$SystemState,
+        
         [Parameter(Mandatory = $true)]
-        [hashtable]$Desired
+        [hashtable]$ExistingConfig
     )
     
-    Import-Module (Join-Path $PSScriptRoot "..\sandbox.psm1") -Force -ErrorAction SilentlyContinue
+    # Use generic package merge
+    $result = Merge-PackageState -SystemState $SystemState -SpecState $ExistingConfig
     
-    if (-not (Test-SandboxActive)) {
-        throw "Not in sandbox mode"
+    # Use generic source merge
+    $mergedSources = Merge-SourceCollection `
+        -SystemSources $SystemState.Sources `
+        -ExistingSources $ExistingConfig.Sources `
+        -NameKey "Name"
+    
+    if ($mergedSources.Count -gt 0) {
+        $result.Sources = $mergedSources
     }
     
-    $currentState = Get-SandboxState -Provider "Winget"
-    $currentPackages = @($currentState.packages | ForEach-Object { $_.Id })
-    
-    # Handle both simple and extended format for Installed
-    $desiredPackages = @()
-    if ($Desired.Installed) {
-        foreach ($pkg in $Desired.Installed) {
-            $desiredPackages += Get-PackageName -Package $pkg
-        }
-    }
-    
-    $results = @{
-        Status = "Success"
-        Installed = @()
-        Removed = @()
-        AlreadyInstalled = @()
-    }
-    
-    # Simulate installations
-    foreach ($package in $desiredPackages) {
-        if ($package -notin $currentPackages) {
-            $currentState.packages += @{
-                Name = $package
-                Id = $package
-                Version = "latest"
-            }
-            $results.Installed += $package
-        }
-        else {
-            $results.AlreadyInstalled += $package
-        }
-    }
-    
-    # Track removal if specified
-    if ($Desired.Removed) {
-        foreach ($package in $Desired.Removed) {
-            if ($package -in $currentPackages) {
-                $currentState.packages = @($currentState.packages | Where-Object { $_.Id -ne $package })
-                $results.Removed += $package
-            }
-        }
-    }
-    
-    # Update sandbox state
-    Set-SandboxState -Provider "Winget" -State $currentState
-    
-    # Record change
-    Add-SandboxChange -Provider "Winget" -Change $results
-    
-    return $results
+    return $result
 }
 
+# Export module members
 Export-ModuleMember -Function @(
-    "Get-ProviderInfo"
-    "Test-WingetInstalled"
-    "Invoke-WingetCommand"
-    "Get-WingetExport"
-    "Get-InstalledWingetPackages"
-    "Get-WingetPackageInfo"
-    "Get-PackageName"
-    "Get-PackageFlags"
-    "Test-WingetState"
-    "Set-WingetState"
-    "Export-WingetState"
-    "Compare-WingetState"
-    "Get-WingetMockState"
-    "Set-WingetMockState"
-    "Invoke-WingetSandboxApply"
+    'Get-ProviderInfo',
+    'Test-WingetInstalled',
+    'Get-WingetExport',
+    'Get-InstalledWingetPackages',
+    'Get-WingetPackageInfo',
+    'Get-PackageIdentifier',
+    'Get-PackageVersion',
+    'Get-PackageFlags',
+    'Test-WingetState',
+    'Set-WingetState',
+    'Export-WingetState',
+    'Compare-WingetState',
+    'Merge-WingetState'
 )

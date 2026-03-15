@@ -13,7 +13,6 @@ BeforeAll {
     Import-Module "$script:WinspecRoot\triggers\activation.psm1" -Force -Prefix Activation
     
     # NOW set up mocks AFTER importing modules that use them
-    # Mock Invoke-RestMethod globally (before importing exec.psm1)
     Mock Invoke-RestMethod { 
         return "@{ Name = 'mocked' }"
     }

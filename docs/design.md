@@ -243,10 +243,10 @@ function Invoke-WinSpec {
 | Function | Purpose |
 |----------|---------|
 | `Resolve-Spec` | Resolve imports and merge configurations |
-| `Invoke-DeclarativeProviders` | Execute all declarative providers |
+| `Invoke-Managers` | Execute all declarative providers |
 | `Invoke-Triggers` | Execute trigger providers |
 | `Get-SystemStatus` | Get current system status |
-| `Get-DiscoveredProviders` | Discover available providers |
+| `Get-ProviderNames` | Discover available providers |
 
 ---
 

@@ -2,54 +2,254 @@
 # Provides shared functionality for pull, push, diff, merge, and sync commands
 
 # Import dependent modules
-Import-Module (Join-Path $PSScriptRoot "logging.psm1") -Force
-Import-Module (Join-Path $PSScriptRoot "utils.psm1") -Force
+$ModuleRoot = $PSScriptRoot
+Import-Module (Join-Path $ModuleRoot "logging.psm1") -ErrorAction Stop
+Import-Module (Join-Path $ModuleRoot "utils.psm1") -ErrorAction Stop
+Import-Module (Join-Path $ModuleRoot "checkpoint.psm1") -ErrorAction Stop
+Import-Module (Join-Path $ModuleRoot "schema.psm1") -ErrorAction Stop
+Import-Module (Join-Path $ModuleRoot "sandbox.psm1") -ErrorAction SilentlyContinue
 
 # =============================================================================
 # PROVIDER RESOLUTION
 # =============================================================================
 
-function Resolve-ProviderList {
+# Provider cache for performance
+$script:CachedProviders = $null
+
+# State cache for performance (avoids repeated external command calls)
+$script:ProviderStateCache = @{}
+$script:StateCacheTimestamp = $null
+$script:StateCacheTTLSeconds = 30  # Cache state for 30 seconds
+
+function Clear-SystemStateCache {
     <#
     .SYNOPSIS
-        Resolves the list of providers to operate on.
-    .PARAMETER Providers
-        Array of provider names to filter by (optional)
-    .OUTPUTS
-        Array of provider names to use
+        Clears the system state cache.
+    .DESCRIPTION
+        Forces the next Get-SystemState call to fetch fresh data instead of
+        returning cached values. Useful after making system changes.
     #>
+    [CmdletBinding()]
+    param()
+    
+    $script:ProviderStateCache = @{}
+    $script:StateCacheTimestamp = $null
+}
+# =============================================================================
+# PROVIDER DISCOVERY
+# =============================================================================
+
+function Get-Providers {
+    <#
+.SYNOPSIS
+    Discover provider modules.
+
+.DESCRIPTION
+    Scans provider directories and returns structured provider metadata.
+    If BasePath is not specified, the module root will be used.
+
+.PARAMETER BasePath
+    Optional root directory to scan. Defaults to $ModuleRoot.
+
+.PARAMETER Type
+    Provider type to filter by. If omitted, all provider types are scanned.
+
+.OUTPUTS
+    PSCustomObject with properties:
+        Type
+        Name
+        Path
+#>
+
+    [CmdletBinding()]
     param(
-        [string[]]$Providers = @()
+        [string]$BasePath = $ModuleRoot,
+
+        [ValidateSet("Declarative", "Trigger")]
+        [string]$Type
     )
-    
-    # Default providers
-    $defaultProviders = @("Scoop", "Winget", "Registry", "Service", "Feature")
-    
-    if ($Providers.Count -gt 0) {
-        # Filter to requested providers
-        return $Providers
+
+    $results = @()
+
+    if (-not (Test-Path $BasePath)) {
+        Write-Verbose "Provider base path not found: $BasePath"
+        return $results
     }
+
+    # Resolve which directories to scan
+    $typeMap = @{
+        Declarative = "managers"
+        Trigger     = "triggers"
+    }
+
+    $typeDirs = if ($Type) {
+        @($typeMap[$Type])
+    }
+    else {
+        $typeMap.Values
+    }
+
+    foreach ($dir in $typeDirs) {
+        $providerDir = Join-Path $BasePath $dir
+        if (-not (Test-Path $providerDir)) {
+            continue
+        }
+
+        $files = Get-ChildItem -Path $providerDir -Filter "*.psm1" -ErrorAction SilentlyContinue
+
+        foreach ($file in $files) {
+            try {
+
+                $module = Import-Module $file.FullName -PassThru -ErrorAction Stop
+                $info = & $module Get-ProviderInfo
+
+                if ($null -ne $info -and $info.Name) {
+
+                    $results += [PSCustomObject]@{
+                        Type = $info.Type
+                        Name = $info.Name
+                        Path = $file.FullName
+                    }
+
+                    Write-Verbose "Discovered provider: $($info.Name) ($($info.Type))"
+                }
+            }
+            catch {
+                Write-Verbose "Skipping provider file $($file.Name): $_"
+            }
+        }
+    }
+
+    return $results
+}
+
+function Get-Managers {
+    param([string]$ConfigPath)
+
+    $providers = Get-Providers -Type Declarative
+
+    if ($ConfigPath) {
+        $providers += Get-Providers -Type Declarative -BasePath $ConfigPath
+    }
+
+    return $providers
+}
+
+function Get-Triggers {
+    param([string]$ConfigPath)
+
+    $providers = Get-Providers -Type Trigger 
+
+    if ($ConfigPath) {
+        $providers += Get-Providers -Type Trigger -BasePath $ConfigPath
+    }
+
+    return $providers
+}
+
+function Resolve-Triggers {
+    param(
+        $Config,
+        $UserTriggers,
+        [string]$ConfigPath
+    )
+
+    $providers = Get-Triggers -ConfigPath $ConfigPath
+    $resolved = @()
+
+    # read config triggers
+    $configTriggers = @{}
+    if ($Config.Trigger) {
+        $configTriggers = $Config.Trigger
+    }
+
+    # determine execution set
+    if ($null -eq $UserTriggers) {
+        return $resolved
+    }
+    elseif ($UserTriggers -eq "*") {
+        $names = $providers.Name
+    }
+    elseif ($UserTriggers -is [string]) {
+        $names = @($UserTriggers)
+    }
+    elseif ($UserTriggers -is [array]) {
+        $names = $UserTriggers
+    }
+    elseif ($UserTriggers -is [hashtable]) {
+        $names = $UserTriggers.Keys
+    }
+
+    foreach ($name in $names) {
+        $provider = $providers | Where-Object Name -eq $name
+        if (-not $provider) {
+            Write-Log -Level ERROR -Message "Trigger not found: $name"
+            continue
+        }
+
+        $value = $true
+
+        if ($configTriggers.ContainsKey($name)) {
+            $value = $configTriggers[$name]
+        }
+
+        if ($UserTriggers -is [hashtable] -and $UserTriggers.ContainsKey($name)) {
+            $value = $UserTriggers[$name]
+        }
+
+        $resolved += [pscustomobject]@{
+            Name     = $name
+            Provider = $provider
+            Value    = $value
+        }
+    }
+
+    return $resolved
+}
+
+function Resolve-ProviderList {
+    param([string[]]$Providers = @())
+    
+    # Registry, Feature, Service, Winget, Scoop
+    $defaultProviders = @("Registry", "Feature")
+    
+    if ($providers -and $Providers.Count -gt 0) { return $Providers }
     
     return $defaultProviders
 }
 
-function Get-AvailableProviders {
-    <#
-    .SYNOPSIS
-        Gets the list of available providers from the managers directory.
-    .OUTPUTS
-        Array of available provider names
-    #>
-    $managersPath = Join-Path $PSScriptRoot "managers"
-    $available = @()
-    
-    if (Test-Path $managersPath) {
-        Get-ChildItem -Path $managersPath -Filter "*.psm1" | ForEach-Object {
-            $available += $_.BaseName
-        }
+function Resolve-ProviderCommand {
+    param(
+        [pscustomobject]$Provider,
+        [ValidateSet("Export", "Merge")]
+        [string]$Operation
+    )
+
+    $cmdName = "$Operation-$($Provider.Name)State"
+
+    if (-not (Get-Module -Name $Provider.Name)) {
+        Import-Module $Provider.Path -ErrorAction Stop
     }
-    
-    return $available
+
+    return Get-Command $cmdName -ErrorAction SilentlyContinue
+}
+
+function Export-ProviderState {
+    param([pscustomobject]$Provider)
+
+    try {
+        $cmd = Resolve-ProviderCommand -Provider $Provider -Operation Export
+        if ($cmd) {
+            return & $cmd
+        }
+
+        Write-Log -Level WARN -Message "Provider $($Provider.Name) missing export function"
+    }
+    catch {
+        Write-Log -Level WARN -Message "Failed exporting provider $($Provider.Name)"
+    }
+
+    return $null
 }
 
 # =============================================================================
@@ -57,45 +257,116 @@ function Get-AvailableProviders {
 # =============================================================================
 
 function Get-SystemState {
-    <#
-    .SYNOPSIS
-        Captures the current system state via providers.
-    .PARAMETER Providers
-        Array of provider names to capture (default: all available)
-    .OUTPUTS
-        Hashtable representing the system state
-    #>
     [CmdletBinding()]
     param(
-        [string[]]$Providers = @()
+        [string[]]$Providers = @(),
+        [string]$ConfigPath,
+        [switch]$NoCache
     )
-    
-    $providersToCapture = Resolve-ProviderList -Providers $Providers
-    
-    $state = @{}
-    
-    foreach ($provider in $providersToCapture) {
-        $modulePath = Join-Path $PSScriptRoot "managers\$provider.psm1"
-        if (Test-Path $modulePath) {
-            try {
-                Import-Module $modulePath -Force
-                # Use Export- function which has no mandatory params
-                $exportFunction = "Export-${provider}State"
-                
-                if (Get-Command $exportFunction -ErrorAction SilentlyContinue) {
-                    $providerState = & $exportFunction
-                    if ($providerState) {
-                        $state[$provider] = $providerState
-                    }
-                }
-            }
-            catch {
-                Write-Log -Level "WARN" -Message "Failed to capture $provider state: $($_.Exception.Message)"
+
+    # Cache
+    $now = Get-Date
+    if (-not $NoCache -and
+        $script:StateCacheTimestamp -and
+        ($now - $script:StateCacheTimestamp).TotalSeconds -lt $script:StateCacheTTLSeconds -and
+        $script:ProviderStateCache.Count -gt 0) {
+
+        $result = @{}
+        foreach ($p in Resolve-ProviderList -Providers $Providers) {
+            if ($script:ProviderStateCache.ContainsKey($p)) {
+                $result[$p] = $script:ProviderStateCache[$p]
             }
         }
+        return $result
     }
-    
+
+    $allProviders = Get-Managers -ConfigPath $ConfigPath
+
+    $Providers = Resolve-ProviderList $Providers
+
+    if ($Providers.Count -gt 0) {
+        $providersToCapture = $allProviders | Where-Object { $Providers -contains $_.Name }
+    }
+    else {
+        $providersToCapture = $allProviders
+    }
+
+    $state = @{}
+
+    foreach ($provider in $providersToCapture) {
+        $providerState = Export-ProviderState -Provider $provider
+        if ($null -ne $providerState) {
+            $state[$provider.Name] = $providerState
+        }
+    }
+
+    $script:ProviderStateCache = $state
+    $script:StateCacheTimestamp = Get-Date
+
     return $state
+}
+
+# =============================================================================
+# STATE MERGE - Preserves user settings during pull
+# =============================================================================
+function Merge-ProviderState {
+    param(
+        [pscustomobject]$Provider,
+        $System,
+        $Existing
+    )
+
+    try {
+        $cmd = Resolve-ProviderCommand -Provider $Provider -Operation Merge
+
+        if ($cmd) {
+            return & $cmd -SystemState $System -SpecState $Existing
+        }
+
+        return $System
+    }
+    catch {
+        Write-Log -Level WARN -Message "Merge failed for provider $($Provider.Name)"
+        return $System
+    }
+}
+
+function Merge-SystemState {
+    param(
+        [hashtable]$SystemState,
+        [hashtable]$SpecState,
+        [pscustomobject[]]$Providers
+    )
+
+    if (!$SystemState) { return $SpecState }
+    if (!$SpecState) { return $SystemState }
+
+    $merged = @{}
+
+    $keys = [System.Collections.Generic.HashSet[string]]::new(
+        $SystemState.Keys + $SpecState.Keys
+    )
+
+    foreach ($k in $keys) {
+        if (!$SystemState.ContainsKey($k)) {
+            $merged[$k] = $SpecState[$k]
+            continue
+        }
+
+        if (!$SpecState.ContainsKey($k)) {
+            $merged[$k] = $SystemState[$k]
+            continue
+        }
+
+        $provider = $Providers | Where-Object Name -eq $k
+
+        $merged[$k] = Merge-ProviderState `
+            -Provider $provider `
+            -System $SystemState[$k] `
+            -Existing $SpecState[$k]
+    }
+
+    return $merged
 }
 
 # =============================================================================
@@ -103,110 +374,47 @@ function Get-SystemState {
 # =============================================================================
 
 function Compare-ProviderState {
-    <#
-    .SYNOPSIS
-        Compares desired state vs current system state for a provider.
-    .PARAMETER Provider
-        Provider name (e.g., "Registry", "Service")
-    .PARAMETER Desired
-        Desired state hashtable
-    .PARAMETER Current
-        Current system state hashtable
-    .OUTPUTS
-        Array of difference objects with Type, Path, CurrentValue, DesiredValue
-    #>
     param(
-        [string]$Provider,
+        [pscustomobject]$Provider,
         [hashtable]$Desired,
         [hashtable]$Current
     )
-    
+
     $differences = @()
-    
-    $modulePath = Join-Path $PSScriptRoot "managers\$Provider.psm1"
-    if (Test-Path $modulePath) {
-        try {
-            Import-Module $modulePath -Force
-            $compareFunction = "Compare-${Provider}State"
-            
-            if (Get-Command $compareFunction -ErrorAction SilentlyContinue) {
-                $differences = & $compareFunction -System $Current -Desired $Desired
-            }
-        }
-        catch {
-            Write-Log -Level "WARN" -Message "Failed to compare $Provider state: $($_.Exception.Message)"
+    try {
+        $cmd = Resolve-ProviderCommand -Provider $Provider -Operation Compare
+        if ($cmd) {
+            $differences = & $compareFunc -System $Current -Desired $Desired
         }
     }
-    
+    catch {
+        Write-Log -Level "WARN" -Message "Failed to compare $($Provider.Name) state: $($_.Exception.Message)"
+        return $System
+    }
     return $differences
 }
 
 function Compare-SystemState {
-    <#
-    .SYNOPSIS
-        Compares system state with a configuration specification.
-    .PARAMETER SpecPath
-        Path to the desired configuration spec file
-    .PARAMETER Against
-        Optional path to compare against (instead of live system)
-    .PARAMETER Providers
-        Array of provider names to compare (default: all)
-    .OUTPUTS
-        Hashtable with differences per provider
-    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
-        [string]$SpecPath,
-        
-        [string]$Against,
-        
+        [hashtable]$Spec,
+        [hashtable]$Against,
         [string[]]$Providers = @()
     )
     
-    Write-Log -Level "INFO" -Message "Starting system state comparison..."
-    
-    # Import the desired config
-    $desiredConfig = $null
-    try {
-        $desiredConfig = & $SpecPath
-        if ($desiredConfig -isnot [hashtable]) {
-            Write-Log -Level "ERROR" -Message "Spec must return a hashtable: $SpecPath"
-            return $null
-        }
-    }
-    catch {
-        Write-Log -Level "ERROR" -Message "Failed to load spec: $($_.Exception.Message)"
-        return $null
-    }
-    
-    # Get system state (either live or from file)
-    $systemConfig = $null
-    if ($Against) {
-        try {
-            $systemConfig = & $Against
-            Write-Log -Level "INFO" -Message "Comparing against: $Against"
-        }
-        catch {
-            Write-Log -Level "ERROR" -Message "Failed to load comparison file: $($_.Exception.Message)"
-            return $null
-        }
-    }
-    else {
-        Write-Log -Level "INFO" -Message "Comparing against live system state..."
-        $systemConfig = Get-SystemState -Providers $Providers
-    }
-    
-    # Determine which providers to compare
+    $desiredConfig = $Spec
+    $systemConfig = $Against
+    # Determine providers to compare
     $providersToCompare = Resolve-ProviderList -Providers $Providers | Where-Object {
         $desiredConfig.ContainsKey($_) -or $systemConfig.ContainsKey($_)
     }
     
     $allDifferences = @{
-        Added = @()
+        Added   = @()
         Removed = @()
         Changed = @()
-        Equal = @()
+        Equal   = @()
     }
     
     # Compare each provider
@@ -214,16 +422,13 @@ function Compare-SystemState {
         $systemState = if ($systemConfig.ContainsKey($providerName)) { $systemConfig[$providerName] } else { @{} }
         $desiredState = if ($desiredConfig.ContainsKey($providerName)) { $desiredConfig[$providerName] } else { @{} }
         
-        # Skip if neither has data
-        if ($systemState.Count -eq 0 -and $desiredState.Count -eq 0) {
-            continue
-        }
+        if ($systemState.Count -eq 0 -and $desiredState.Count -eq 0) { continue }
         
         Write-Log -Level "INFO" -Message "Comparing $providerName state..."
         
-        $differences = Compare-ProviderState -Provider $providerName -Desired $desiredState -Current $systemState
+        $diffs = Compare-ProviderState -Provider $providerName -Desired $desiredState -Current $systemState
         
-        foreach ($diff in $differences) {
+        foreach ($diff in $diffs) {
             switch ($diff.Type) {
                 "Added" { $allDifferences.Added += $diff }
                 "Removed" { $allDifferences.Removed += $diff }
@@ -232,79 +437,301 @@ function Compare-SystemState {
             }
         }
         
-        $count = $differences.Count
-        Write-Log -Level "OK" -Message "Found $count differences in $providerName"
+        Write-Log -Level "OK" -Message "Found $($diffs.Count) differences in $providerName"
     }
     
     return $allDifferences
 }
 
 # =============================================================================
-# CONFIG FILE OPERATIONS (use utils.psm1 implementations)
+# DECLARATIVE PROVIDER EXECUTION
+# =============================================================================
+# 
+function Invoke-Manager {
+    <#
+.SYNOPSIS
+    Executes a single declarative provider.
+#>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)]
+        [pscustomobject]$Provider
+    )
+
+    $providerName = $Provider.Name
+    $providerPath = $Provider.Path
+    $result = @{}
+
+    Write-LogSection -Name $providerName
+
+    try {
+        Import-Module $providerPath -ErrorAction Stop
+    }
+    catch {
+        Write-Log -Level "ERROR" -Message "Failed to load provider: $providerName"
+        return @{ Status = "Error"; Message = "Failed to load provider" }
+    }
+
+    $desired = $Config.$providerName
+
+    $testStateCmd = Get-Command "Test-$($providerName)State" -ErrorAction SilentlyContinue
+    $setStateCmd = Get-Command "Set-$($providerName)State"  -ErrorAction SilentlyContinue
+
+    $isSandbox = Test-SandboxActive
+    $sandboxMode = if ($isSandbox) { Get-SandboxMode } else { "Live" }
+
+    $sandboxApplyCmd = $null
+    if ($isSandbox -and $sandboxMode -eq "Mock") {
+        $sandboxApplyCmd = Get-Command "Invoke-$($providerName)SandboxApply" -ErrorAction SilentlyContinue
+    }
+
+    if ($null -eq $testStateCmd -or $null -eq $setStateCmd) {
+        Write-Log -Level "ERROR" -Message "Provider $providerName missing required functions"
+        return @{ Status = "Error"; Message = "Missing provider functions" }
+    }
+
+    try {
+        $inDesiredState = & $testStateCmd -Desired $desired
+    }
+    catch {
+        Write-Log -Level "ERROR" -Message "Provider $providerName test failed: $_"
+        return @{ Status = "Error"; Message = "Test failed: $_" }
+    }
+
+    if ($inDesiredState) {
+        Write-Log -Level "OK" -Message "$providerName already in desired state"
+        return @{ Status = "AlreadyInDesiredState" }
+    }
+
+    if ($WhatIf -or $sandboxMode -eq "DryRun") {
+        Write-Log -Level "INFO" -Message "Would apply $providerName changes (dry run)"
+        return @{ Status = "DryRun"; Changes = "Pending" }
+    }
+
+    if ($PSCmdlet.ShouldProcess($providerName, "Apply configuration")) {
+        try {
+            if ($sandboxApplyCmd) {
+                $result = & $sandboxApplyCmd -Desired $desired
+                Write-Log -Level "INFO" -Message "[SANDBOX] Applied $providerName"
+            }
+            else {
+                $result = & $setStateCmd -Desired $desired
+            }
+        }
+        catch {
+            Write-Log -Level "ERROR" -Message "Provider $providerName set failed: $_"
+            return @{ Status = "Error"; Message = "Set failed: $_" }
+        }
+    }
+
+    return $result
+}
+
+function Invoke-Managers {
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory)]
+        [hashtable]$Config,
+
+        [string]$ConfigPath,
+
+        [string[]]$Providers = @()
+    )
+
+    $results = @{}
+
+    $providerObjects = Get-Providers -Type Declarative
+
+    $restrictedProviders = $Providers
+    if ($Providers.Count -eq 0 -and $Config.ContainsKey('Providers')) {
+        $restrictedProviders = $Config.Providers
+    }
+
+    foreach ($provider in $providerObjects) {
+
+        $name = $provider.Name
+
+        if ($null -eq $Config.$name) {
+            continue
+        }
+
+        if ($restrictedProviders.Count -gt 0 -and $name -notin $restrictedProviders) {
+            Write-Log -Level "INFO" -Message "Skipping $name (not in Providers list)"
+            continue
+        }
+
+        $results[$name] = Invoke-ManagerProvider `
+            -Provider $provider `
+            -Config $Config `
+            -ConfigPath $ConfigPath
+    }
+
+    return $results
+}
+
+# =============================================================================
+# TRIGGER EXECUTION
 # =============================================================================
 
-# Note: Export-ConfigFile and Import-ConfigFile are provided by utils.psm1
-# Aliases for backward compatibility with modules expecting them here
+function Invoke-Trigger {
+
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)]
+        [pscustomobject]$Provider,
+
+        $Value
+    )
+
+    $name = $Provider.Name
+    $path = $Provider.Path
+
+    try {
+        Import-Module $path -ErrorAction Stop
+    }
+    catch {
+        Write-Log -Level "ERROR" -Message "Failed to load trigger: $name"
+        return @{ Status="Error"; Message="Failed to load trigger" }
+    }
+
+    $cmd = Get-Command "Invoke-$($name)Trigger" -ErrorAction SilentlyContinue
+    if (-not $cmd) {
+        Write-Log -Level "ERROR" -Message "Trigger $name missing invoke function"
+        return @{ Status="Error"; Message="Missing trigger function" }
+    }
+
+    if ($PSCmdlet.ShouldProcess($name,"Execute trigger")) {
+        try {
+            return & $cmd -Option $Value
+        }
+        catch {
+            Write-Log -Level "ERROR" -Message "Trigger $name failed: $_"
+            return @{ Status="Error"; Message=$_.Exception.Message }
+        }
+    }
+}
+
+
+function Invoke-Triggers {
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        $Config,
+        $Triggers,
+        [string]$ConfigPath
+    )
+
+    $triggers = Resolve-Triggers `
+        -Config $Config `
+        -UserTrigger $Triggers `
+        -ConfigPath $ConfigPath
+
+    $results = @{}
+
+    foreach ($t in $triggers) {
+        $name = $t.Name
+        $provider = $t.Provider
+        $value = $t.Value
+
+        $results[$name] = Invoke-Trigger `
+            -Provider $provider `
+            -Value $value
+    }
+
+    return $results
+}
+
+
+# =============================================================================
+# MAIN EXECUTION
+# =============================================================================
+
+function Invoke-WinSpec {
+    [CmdletBinding(SupportsShouldProcess)]
+    param (
+        [Parameter(Mandatory)]
+        [hashtable]$Spec,
+        
+        [Parameter(Mandatory = $false)]
+        [string[]]$Providers = @(),
+
+        [Parameter(Mandatory = $false)]
+        $Triggers,
+
+        [switch]$Checkpoint
+    )
+
+    Write-LogHeader -Title "WinSpec Execution"
+    Write-Log -Level "INFO" -Message "Validating specification..."
+
+    if (-not (Test-SpecSchema -Spec $Spec)) {
+        Write-Log -Level "ERROR" -Message "Specification validation failed"
+        return @{ Success = $false }
+    }
+    if ($Checkpoint -and -not $DryRun) {
+        $checkpoint = New-Checkpoint -Name "WinSpec-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+        if (-not $checkpoint.Success) {
+            Write-Log -Level "WARN" -Message "Checkpoint creation failed"
+        }
+    }
+
+    $context = @{
+        Config     = $resolved
+        ConfigPath = $configLocation
+    }
+
+    Write-LogSection -Name "Providers"
+    $results = Invoke-Managers @context -Providers $Providers -WhatIf:$DryRun
+    Write-LogSection -Name "Triggers"
+    $results.Triggers = Invoke-Triggers @context -Trigger $Triggers -WhatIf:$DryRun
+
+    foreach ($provider in $results.Keys) {
+        $result = $results[$provider]
+        $status = if ($result.Status) { $result.Status } else { "Completed" }
+        $level = switch ($status) {
+            "AlreadyInDesiredState" { "OK" }
+            "DryRun"                { "INFO" }
+            "Error"                 { "ERROR" }
+            default                 { "APPLIED" }
+        }
+
+        Write-Log -Level $level -Message "$provider : $status"
+    }
+
+    $results.Success = $true
+
+    return $results
+}
 
 # =============================================================================
 # DIFF OUTPUT FORMATTING
 # =============================================================================
 
 function Format-DiffOutput {
-    <#
-    .SYNOPSIS
-        Formats differences for human-readable display.
-    .PARAMETER Differences
-        The differences hashtable from Compare-SystemState
-    .OUTPUTS
-        String formatted for display
-    #>
     [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $true)]
-        [hashtable]$Differences
-    )
+    param([Parameter(Mandatory = $true)][hashtable]$Differences)
     
     $output = @()
     $output += "`n=== STATE DIFFERENCES ===`n"
     
-    # Added items
+    # Added
     if ($Differences.Added.Count -gt 0) {
         $output += "`n[+] ADDED (in config, not in system):"
         foreach ($item in $Differences.Added) {
             $output += "    $($item.Path)"
-            if ($item.DesiredValue -is [hashtable]) {
-                $details = ($item.DesiredValue.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join ", "
-                $output += "       Value: { $details }"
-            }
-            elseif ($item.DesiredValue -is [array]) {
-                $output += "       Value: @($($item.DesiredValue -join ', '))"
-            }
-            else {
-                $output += "       Value: $($item.DesiredValue)"
-            }
+            $output += "       Value: $(ConvertTo-DisplayValue $item.DesiredValue)"
         }
     }
     
-    # Removed items
+    # Removed
     if ($Differences.Removed.Count -gt 0) {
         $output += "`n[-] REMOVED (in system, not in config):"
         foreach ($item in $Differences.Removed) {
             $output += "    $($item.Path)"
-            if ($item.CurrentValue -is [hashtable]) {
-                $details = ($item.CurrentValue.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join ", "
-                $output += "       Current: { $details }"
-            }
-            elseif ($item.CurrentValue -is [array]) {
-                $output += "       Current: @($($item.CurrentValue -join ', '))"
-            }
-            else {
-                $output += "       Current: $($item.CurrentValue)"
-            }
+            $output += "       Current: $(ConvertTo-DisplayValue $item.CurrentValue)"
         }
     }
     
-    # Changed items
+    # Changed
     if ($Differences.Changed.Count -gt 0) {
         $output += "`n[~] CHANGED (different values):"
         foreach ($item in $Differences.Changed) {
@@ -314,17 +741,15 @@ function Format-DiffOutput {
         }
     }
     
-    # Equal items
     $equalCount = if ($Differences.Equal) { $Differences.Equal.Count } else { 0 }
     if ($equalCount -gt 0) {
         $output += "`n[=] EQUAL (matched): $equalCount items"
     }
     
-    # Summary
     $totalChanges = $Differences.Added.Count + $Differences.Removed.Count + $Differences.Changed.Count
     $output += "`n---"
     $output += "Summary: $($Differences.Added.Count) added, $($Differences.Removed.Count) removed, $($Differences.Changed.Count) changed, $equalCount equal"
-    $output += "Total differences: $totalChanges"
+    $output += "`nTotal differences: $totalChanges"
     
     return $output -join "`n"
 }
@@ -333,16 +758,23 @@ function Format-DiffOutput {
 # EXPORTS
 # =============================================================================
 
-# Note: Export-ConfigFile and Import-ConfigFile are now re-exported from utils.psm1
-# for backward compatibility
-
 Export-ModuleMember -Function @(
+    # get
+    "Get-Providers"
+    "Get-Managers"
+    "Get-Triggers"
     "Resolve-ProviderList"
-    "Get-AvailableProviders"
+    # execution
+    "Invoke-WinSpec"
+    "Invoke-Managers"
+    "Invoke-Triggers"
+    # export state
     "Get-SystemState"
+    # compare
     "Compare-ProviderState"
     "Compare-SystemState"
-    "Export-ConfigFile"
-    "Import-ConfigFile"
+    # merge
+    "Merge-ProviderState"
+    "Merge-SystemState"
     "Format-DiffOutput"
 )

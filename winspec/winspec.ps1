@@ -4,48 +4,28 @@
 
 [CmdletBinding(DefaultParameterSetName = "Default")]
 param (
-    [Parameter(Position = 0, ParameterSetName = "Export")]
-    [Parameter(Position = 0, ParameterSetName = "Init")]
     [Parameter(Position = 0, ParameterSetName = "Diff")]
-    [Parameter(Position = 0, ParameterSetName = "Apply")]
     [Parameter(Position = 0, ParameterSetName = "Merge")]
-    [Parameter(Position = 0, ParameterSetName = "Sync")]
-    [Parameter(Position = 0, ParameterSetName = "Trigger")]
     [Parameter(Position = 0, ParameterSetName = "Rollback")]
     [Parameter(Position = 0, ParameterSetName = "Sandbox")]
     [Parameter(Position = 0, ParameterSetName = "Default")]
-    [ValidateSet("apply", "trigger", "status", "rollback", "providers", "validate", "export", "diff", "merge", "sync", "init", "sandbox", "help", "pull", "push")]
+    [ValidateSet("pull", "push", "diff", "merge", "status", "rollback", "providers", "validate", "trigger", "sandbox", "help")]
     [string]$Command = "help",
     
-    # Spec file path for apply, diff, sync commands
     [Parameter(Mandatory = $false)]
     [string]$Spec,
     
-    [Parameter(ParameterSetName = "Apply")]
     [switch]$DryRun,
     
-    [Parameter(ParameterSetName = "Apply")]
+    [Parameter(ParameterSetName = "Push")]
     [switch]$Checkpoint,
+
+    [switch]$NoCache = $False,
     
-    [Parameter(ParameterSetName = "Apply")]
-    [switch]$WithTriggers,
-    
-    # Sandbox parameters
-    [Parameter(ParameterSetName = "Apply")]
-    [Parameter(ParameterSetName = "Sandbox")]
-    [switch]$Sandbox,
-    
-    [Parameter(ParameterSetName = "Apply")]
-    [Parameter(ParameterSetName = "Sandbox")]
-    [ValidateSet("DryRun", "Mock")]
-    [string]$SandboxMode = "Mock",
-    
-    [Parameter(ParameterSetName = "Apply")]
-    [Parameter(ParameterSetName = "Sandbox")]
-    [string]$Profile = "default",
-    
+    # "*", string, array
+    [Parameter(ParameterSetName = "Push")]
     [Parameter(ParameterSetName = "Trigger", Position = 1)]
-    [object]$Trigger,
+    $Triggers,
     
     [Parameter(ParameterSetName = "Rollback")]
     [int]$SequenceNumber,
@@ -53,18 +33,13 @@ param (
     [Parameter(ParameterSetName = "Rollback")]
     [switch]$Last,
     
-    [Parameter(Mandatory = $false)]
-    [string]$ConfigPath,
-    
     [Parameter(ParameterSetName = "Export")]
     [ValidateSet("ps1", "json")]
     [string]$Format = "ps1",
     
-    # Output path for export and init commands
     [Parameter(Mandatory = $false)]
     [string]$Output,
     
-    # Providers to include (for export, init, diff commands)
     [Parameter(Mandatory = $false)]
     [string[]]$Providers,
     
@@ -79,32 +54,22 @@ param (
     [string]$Incoming,
     
     [Parameter(ParameterSetName = "Merge")]
-    [string]$MergeOutput,
-    
-    [Parameter(ParameterSetName = "Merge")]
     [ValidateSet("auto", "union", "ours", "theirs")]
     [string]$Strategy = "auto",
     
     [Parameter(ParameterSetName = "Merge")]
-    [Parameter(ParameterSetName = "Init")]
+    [Parameter(ParameterSetName = "Pull")]
     [switch]$Interactive,
     
-    # Sync command parameters
-    [Parameter(ParameterSetName = "Sync")]
-    [switch]$SyncInteractive,
+    [switch]$Apply = $False,
+
+    # Sandbox parameters
+    [Parameter(ParameterSetName = "Sandbox")]
+    [switch]$Sandbox,
     
-    # Init command parameters
-    [Parameter(ParameterSetName = "Init")]
-    [switch]$Template,
-    
-    [Parameter(ParameterSetName = "Init")]
-    [switch]$Minimal,
-    
-    [Parameter(ParameterSetName = "Init")]
-    [string]$Name,
-    
-    [Parameter(ParameterSetName = "Init")]
-    [string]$Description,
+    [Parameter(ParameterSetName = "Sandbox")]
+    [ValidateSet("DryRun", "Mock")]
+    [string]$SandboxMode = "Mock",
     
     # Help parameter for subcommand help
     [Parameter(Mandatory = $false)]
@@ -112,13 +77,22 @@ param (
 )
 
 $ErrorActionPreference = 'Stop'
-$Script:WinspecRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path $PSCommandPath -Parent }
+$Script:WinspecRoot = $PSScriptRoot
 
 # Import core modules first so functions can use them
-Import-Module (Join-Path $Script:WinspecRoot "logging.psm1") -Force -Global
-Import-Module (Join-Path $Script:WinspecRoot "schema.psm1") -Force -Global
-Import-Module (Join-Path $Script:WinspecRoot "checkpoint.psm1") -Force -Global
-Import-Module (Join-Path $Script:WinspecRoot "exec.psm1") -Force -Global
+$modules = @(
+    "utils.psm1"
+    "state.psm1"
+    "logging.psm1"
+    "schema.psm1"
+    "checkpoint.psm1"
+)
+foreach ($m in $modules) {
+    Import-Module (Join-Path $Script:WinspecRoot $m) -ErrorAction Stop
+}
+
+$Spec = Resolve-SpecPath $Spec
+$ConfigPath = Split-Path $Spec -Parent
 
 function Show-Help {
     [CmdletBinding()]
@@ -130,48 +104,6 @@ function Show-Help {
     # If a specific command is requested, show only that command's help
     if ($Command -and $Command -ne "help") {
         switch ($Command) {
-            "apply" {
-                Write-Host @"
-
-WinSpec Apply - Apply a specification file
-============================================
-
-USAGE:
-    winspec apply -Spec <path> [options]
-
-DESCRIPTION:
-    Applies a specification file to configure the Windows system.
-    By default, only declarative providers are executed (idempotent).
-    Use -WithTriggers to include non-idempotent trigger execution.
-
-OPTIONS:
-    -Spec <path>          Path to specification file (required)
-    -DryRun               Preview changes without applying
-    -Checkpoint           Create restore point before applying
-    -WithTriggers         Include trigger execution
-    -Sandbox              Run in sandbox mode
-    -SandboxMode <mode>   Sandbox mode: DryRun or Mock (default: Mock)
-    -Profile <name>       Sandbox profile name (default: default)
-    -ConfigPath <path>     Path to configuration directory
-
-EXAMPLES:
-    # Apply a specification (declarative only)
-    winspec apply -Spec .\specs\developer.ps1
-
-    # Apply with triggers (runs everything)
-    winspec apply -Spec .\specs\developer.ps1 -WithTriggers
-
-    # Dry run (preview changes)
-    winspec apply -Spec .\specs\developer.ps1 -DryRun
-
-    # Apply with checkpoint
-    winspec apply -Spec .\specs\developer.ps1 -Checkpoint
-
-    # Run in sandbox mode
-    winspec apply -Spec .\specs\developer.ps1 -Sandbox -SandboxMode Mock
-
-"@
-            }
             "trigger" {
                 Write-Host @"
 
@@ -187,12 +119,10 @@ DESCRIPTION:
 
 OPTIONS:
     -Trigger <input>      Trigger configuration:
-                         - Hashtable: @{ name = options }
-                         - Array: @("name1", "name2")
-                         - String: "name"
-                         - Omit: run all discovered triggers
+                          - Array: @("name1", "name2")
+                          - String: "name"
+                          - Omit: run all discovered triggers
     -Spec <path>          Path to specification file
-    -ConfigPath <path>   Path to configuration directory
 
 EXAMPLES:
     # Run all available triggers
@@ -223,11 +153,12 @@ DESCRIPTION:
     WinSpec providers.
 
 OPTIONS:
-    -ConfigPath <path>   Path to configuration directory
+    -Output <path>       Output Path
+    -Format <format>      Output format: ps1 or json (default: ps1)
 
 EXAMPLES:
     winspec status
-    winspec status -ConfigPath .\config
+    winspec status -Output .\config -Format json
 
 "@
             }
@@ -302,36 +233,6 @@ EXAMPLES:
 
 "@
             }
-            "export" {
-                Write-Host @"
-
-WinSpec Export - Export current system state
-=============================================
-
-USAGE:
-    winspec export [options]
-
-DESCRIPTION:
-    Exports the current system state to a configuration file.
-
-OPTIONS:
-    -Output <path>        Path to write exported configuration
-    -Providers <array>    Array of providers to export (default: all)
-    -Format <format>      Output format: ps1 or json (default: ps1)
-    -ConfigPath <path>    Path to configuration directory
-
-EXAMPLES:
-    # Export to default file
-    winspec export
-
-    # Export specific providers
-    winspec export -Providers Registry,Scoop
-
-    # Export as JSON
-    winspec export -Format json -Output state.json
-
-"@
-            }
             "pull" {
                 Write-Host @"
 
@@ -346,11 +247,17 @@ DESCRIPTION:
     This is equivalent to 'export' - captures current system state.
 
 OPTIONS:
-    -Output <path>        Path to write configuration file
+    -Spec <path>          Path to specification file (for provider hints or merging)
+    -Output <path>        Path to write configuration file (else resolve to Spec path)
     -Providers <array>    Array of providers to include (default: all)
     -Format <format>      Output format: ps1 or json (default: ps1)
-    -ConfigPath <path>   Path to configuration directory
     -DryRun              Preview what would be captured
+    -Apply               Merge with existing spec if output file already exists
+    -Interactive         Interactive item selection
+    -Minimal             Exclude empty/default values
+    -NoCache             Skip caching of provider data
+    -Name <string>       Spec name (default: 'WinSpec Configuration')
+    -Description <string> Spec description (default: 'Generated by WinSpec')
 
 EXAMPLES:
     # Pull to default file
@@ -361,6 +268,12 @@ EXAMPLES:
 
     # Pull as JSON
     winspec pull -Output state.json -Format json
+
+    # Pull with interactive selection
+    winspec pull -Interactive
+
+    # Pull minimal config (exclude empty values)
+    winspec pull -Minimal
 
 "@
             }
@@ -381,9 +294,11 @@ OPTIONS:
     -Spec <path>          Path to specification file (required)
     -DryRun              Preview changes without applying
     -Checkpoint          Create restore point before applying
-    -WithTriggers        Include triggers in the apply
     -Providers <array>   Array of providers to apply (default: all)
-    -ConfigPath <path>   Path to configuration directory
+    -Triggers <input>    Trigger configuration:
+                          - Array: @("name1", "name2")
+                          - String: "name"
+                          - Hashtable: @{ activation = "KMS38"; debloat = @{ Silent = $true } }
 
 EXAMPLES:
     # Push config to system
@@ -394,6 +309,9 @@ EXAMPLES:
 
     # Push with restore point
     winspec push -Spec config.ps1 -Checkpoint
+
+    # Push with specific triggers
+    winspec push -Spec config.ps1 -Triggers @("activation", "debloat")
 
 "@
             }
@@ -414,7 +332,8 @@ OPTIONS:
     -Spec <path>          Path to specification file to compare (required)
     -Against <path>       Path to compare against (default: live system)
     -Providers <array>    Array of providers to compare (default: all)
-    -ConfigPath <path>    Path to configuration directory
+    -OutputFormat <format> Output format: text, json, or simple (default: text)
+    -ShowEqual            Include equal items in output (default: false)
 
 EXAMPLES:
     # Compare spec against live system
@@ -425,6 +344,9 @@ EXAMPLES:
 
     # Compare specific providers
     winspec diff -Spec .\specs\developer.ps1 -Providers Registry
+
+    # Output as JSON
+    winspec diff -Spec .\specs\developer.ps1 -OutputFormat json
 
 "@
             }
@@ -443,9 +365,10 @@ DESCRIPTION:
 OPTIONS:
     -Base <path>           Path to base configuration file (required)
     -Incoming <path>       Path to incoming configuration file (required)
-    -MergeOutput <path>    Path to write merged configuration
+    -Output <path>         Path to write merged configuration
     -Strategy <strategy>    Merge strategy: auto, union, ours, theirs (default: auto)
     -Interactive           Enable interactive conflict resolution
+    -DryRun               Preview merge without writing
 
 EXAMPLES:
     # Auto merge
@@ -457,67 +380,8 @@ EXAMPLES:
     # Interactive merge
     winspec merge -Base base.ps1 -Incoming changes.ps1 -Interactive
 
-"@
-            }
-            "sync" {
-                Write-Host @"
-
-WinSpec Sync - Interactive sync between system and config
-==========================================================
-
-USAGE:
-    winspec sync -Spec <path> [options]
-
-DESCRIPTION:
-    Interactive synchronization between the system state and
-    a specification file.
-
-OPTIONS:
-    -Spec <path>             Path to specification file (required)
-    -SyncInteractive        Enable interactive prompts for sync decisions
-    -ConfigPath <path>       Path to configuration directory
-
-EXAMPLES:
-    winspec sync -Spec .\specs\developer.ps1
-
-    winspec sync -Spec .\specs\developer.ps1 -SyncInteractive
-
-"@
-            }
-            "init" {
-                Write-Host @"
-
-WinSpec Init - Initialize a new configuration
-================================================
-
-USAGE:
-    winspec init [options]
-
-DESCRIPTION:
-    Initializes a new configuration from the current system state.
-
-OPTIONS:
-    -Output <path>         Path to write generated configuration
-    -Providers <array>     Array of providers to include (default: all)
-    -Interactive           Prompt for each item to include
-    -Template              Include helpful comments and structure
-    -Minimal               Only include non-default settings
-    -Name <name>           Configuration name
-    -Description <desc>    Configuration description
-    -ConfigPath <path>     Path to configuration directory
-
-EXAMPLES:
-    # Initialize with defaults
-    winspec init
-
-    # Initialize with specific options
-    winspec init -Output my-config.ps1 -Template
-
-    # Initialize with interactive selection
-    winspec init -Interactive
-
-    # Initialize specific providers
-    winspec init -Providers Scoop,Registry
+    # Dry run merge (preview only)
+    winspec merge -Base base.ps1 -Incoming changes.ps1 -DryRun
 
 "@
             }
@@ -538,7 +402,6 @@ OPTIONS:
     -Sandbox              Enter sandbox mode
     -SandboxMode <mode>   Sandbox mode: DryRun or Mock (default: Mock)
     -Profile <name>       Sandbox profile name (default: default)
-    -ConfigPath <path>    Path to configuration directory
 
 EXAMPLES:
     # Show sandbox status
@@ -566,27 +429,21 @@ A composable, declarative Windows configuration system
 USAGE:
     winspec <command> [options]
 
-GIT-LIKE COMMANDS (Primary):
-    pull        Pull system state to config file (export/init)
-    push        Push config to system (apply)
+AVAILABLE COMMANDS:
+    pull        Pull system state to a configuration file
+    push        Push configuration to the system
     diff        Compare system state with a spec
     merge       Merge two specification files
     status      Show current system state
-
-LEGACY COMMANDS:
-    apply       Apply a specification file
-    trigger     Execute a specific trigger
     rollback    Rollback to a checkpoint
     providers   List available providers
     validate    Validate a spec without applying
-    export      Export current system state (alias for pull)
-    init        Initialize a new configuration (alias for pull)
-    sync        Interactive sync between system and config
-    sandbox     Test changes in a sandbox environment
+    trigger     Execute a trigger
+    sandbox     Run in sandbox mode
     help        Show this help message
 
 GLOBAL OPTIONS:
-    -ConfigPath     Path to configuration directory (for user providers/triggers)
+    -Spec           Configuration file path
     -Help           Show help for a specific command
 
 EXAMPLES:
@@ -596,23 +453,17 @@ EXAMPLES:
     winspec diff -Spec config.ps1            # Compare system vs config
     winspec merge -Base base.ps1 -Incoming changes.ps1
 
-    # Show help for a specific command
-    winspec pull --help
-    winspec push --help
-    winspec diff --help
-
-    # Apply a specification
-    winspec apply -Spec .\specs\developer.ps1
-
-    # Show current system state
+    # Show system state
     winspec status
 
-    # Initialize a new configuration
-    winspec init
+    # Show help for a specific command
+    winspec pull -Help
+    winspec push -Help
 
-Run 'winspec <command> --help' for detailed help on a specific command.
+Run 'winspec <command> -Help' for detailed help on a specific command.
 "@
 }
+
 
 # Handle -Help flag before command processing
 # This allows "winspec -Help" to show help
@@ -623,252 +474,87 @@ if ($Help) {
 
 # Import core modules
 # Already imported at the top of the script
-
 function Show-Providers {
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory = $false)]
         [string]$ConfigPath
     )
     
-    # Resolve config location if not provided
-    $resolvedConfigPath = if ($ConfigPath) { $ConfigPath } else { Resolve-ConfigLocation }
-    
-    Write-Host ""
-    Write-Host "Available Providers" -ForegroundColor Cyan
-    Write-Host "===================" -ForegroundColor Cyan
-    
-    # Discover declarative providers from managers/
-    Write-Host ""
-    Write-Host "Declarative (Idempotent):" -ForegroundColor Yellow
-    
-    # Built-in managers
-    $managersPath = Join-Path $Script:WinspecRoot "managers"
-    $builtInDeclarative = Get-DiscoveredProviders -Path $managersPath -Type "Declarative"
-    foreach ($provider in $builtInDeclarative) {
-        Write-Host "  $provider" -ForegroundColor White
-    }
-    
-    # User managers from config
-    if ($resolvedConfigPath) {
-        $userManagersPath = Join-Path $resolvedConfigPath "managers"
-        $userDeclarative = Get-DiscoveredProviders -Path $userManagersPath -Type "Declarative"
-        foreach ($provider in $userDeclarative) {
-            Write-Host "  $provider [User]" -ForegroundColor Gray
-        }
-    }
-    
-    # Discover trigger providers from triggers/
-    Write-Host ""
-    Write-Host "Trigger (Non-Idempotent):" -ForegroundColor Yellow
-    
-    # Built-in triggers
-    $triggersPath = Join-Path $Script:WinspecRoot "triggers"
-    $builtInTriggers = Get-DiscoveredProviders -Path $triggersPath -Type "Trigger"
-    foreach ($trigger in $builtInTriggers) {
-        Write-Host "  $trigger" -ForegroundColor White
-    }
-    
-    # User triggers from config
-    if ($resolvedConfigPath) {
-        $userTriggersPath = Join-Path $resolvedConfigPath "triggers"
-        $userTriggers = Get-DiscoveredProviders -Path $userTriggersPath -Type "Trigger"
-        foreach ($trigger in $userTriggers) {
-            Write-Host "  $trigger [User]" -ForegroundColor Gray
-        }
-    }
-    
-    Write-Host ""
-}
+    Write-Debug "Config Path: $ConfigPath"
+    Write-LogHeader "Available Providers"
 
-function Invoke-Validate {
-    param (
-        [string]$SpecPath,
-        [string]$ConfigPath
+    $categories = @(
+        @{ Name = "Declarative (Idempotent):"; Type = "Declarative"; Folder = "managers" }
+        @{ Name = "Trigger (Non-Idempotent):"; Type = "Trigger"; Folder = "triggers" }
     )
-    
-    if (-not $SpecPath) {
-        Write-Log -Level "ERROR" -Message "Specification path required: -Spec <path>"
-        return $false
-    }
-    
-    $config = Import-Spec -Path $SpecPath
-    if (-not $config) {
-        return $false
-    }
-    
-    $resolved = Resolve-Spec -Config $config -BasePath (Split-Path $SpecPath -Parent)
-    
-    # Resolve config location for validation context
-    $configLocation = Resolve-ConfigLocation -ConfigPath $ConfigPath
-    if ($configLocation) {
-        Write-Log -Level "INFO" -Message "Using configuration location: $configLocation"
-    }
-    
-    if (Test-SpecSchema -Config $resolved) {
-        Write-Log -Level "OK" -Message "Specification is valid"
-        Write-Host ""
-        Write-Host "Resolved configuration:" -ForegroundColor Cyan
-        $resolved | ConvertTo-Json -Depth 5
-        return $true
-    }
-    
-    return $false
-}
 
-function Invoke-TriggerCommand {
-    [CmdletBinding()]
-    param (
-        [Parameter(Mandatory = $false)]
-        [object]$Trigger,
-        
-        [Parameter(Mandatory = $false)]
-        [string]$ConfigPath,
-        
-        [Parameter(Mandatory = $false)]
-        [string]$SpecPath
-    )
-    
-    # Resolve config location if not provided
-    $resolvedConfigPath = if ($ConfigPath) { $ConfigPath } else { Resolve-ConfigLocation }
-    
-    # Build trigger config array based on input type
-    $triggerConfig = @()
-    
-    if ($Trigger -is [hashtable]) {
-        # Hashtable: keys are trigger names, values are options
-        foreach ($triggerName in $Trigger.Keys) {
-            $triggerConfig += @{
-                Name = $triggerName
-                Value = $Trigger[$triggerName]
+    foreach ($cat in $categories) {
+        Write-Log -Level INFO $cat.Name
+
+        # Built-in providers
+        $providers = Get-Providers -Type $cat.Type
+        $providers += Get-Providers -Type $cat.Type -BasePath $ConfigPath
+
+        foreach ($provider in $providers) {
+            $name = $provider.Name
+            $path = $provider.Path
+            $info = $null
+            try {
+                $module = Import-Module $path -PassThru -ErrorAction Stop
+                $info = & $module Get-ProviderInfo
+            }
+            catch {
+                Write-Log -Level WARN "Failed to load provider info: $name"
+            }
+
+            $description = if ($info.Description) {
+                $info.Description
+            }
+            else {
+                "$($cat.Type) provider"
+            }
+
+            $isUser = $ConfigPath -and $path.StartsWith($ConfigPath)
+            if ($isUser) {
+                Write-Log -Level INFO "    $name - $description [User]"
+            }
+            else {
+                Write-Log -Level INFO "    $name - $description"
             }
         }
     }
-    elseif ($Trigger -is [array]) {
-        # Array: list of trigger names with default option
-        foreach ($triggerName in $Trigger) {
-            $triggerConfig += @{
-                Name = $triggerName
-                Value = $true
-            }
-        }
-    }
-    elseif ($Trigger -is [string]) {
-        # String: single trigger name with default option
-        $triggerConfig += @{
-            Name = $Trigger
-            Value = $true
-        }
-    }
-    elseif ($null -eq $Trigger) {
-        # No input: discover and run all available triggers
-        $allTriggers = Get-AllTriggers -ConfigPath $resolvedConfigPath
-        
-        if ($allTriggers.Count -eq 0) {
-            Write-Log -Level "ERROR" -Message "No triggers found"
-            return
-        }
-        
-        Write-Log -Level "INFO" -Message "Running all available triggers: $($allTriggers -join ', ')"
-        
-        foreach ($triggerName in $allTriggers) {
-            $triggerConfig += @{
-                Name = $triggerName
-                Value = $true
-            }
-        }
-    }
-    else {
-        Write-Log -Level "ERROR" -Message "Invalid trigger input type: $($Trigger.GetType().Name). Expected hashtable, array, string, or null."
-        return
-    }
-    
-    if ($triggerConfig.Count -eq 0) {
-        Write-Log -Level "ERROR" -Message "No triggers to execute"
-        return
-    }
-    
-    $results = Invoke-Triggers -TriggerConfig $triggerConfig -SpecPath $SpecPath -ConfigPath $resolvedConfigPath
-    Write-Report -Results $results
 }
 
 # Main command dispatcher
 switch ($Command) {
-    "apply" {
-        # Check if help is requested via -Help flag
-        if ($Help) {
-            Show-Help -Command "apply"
-            return
-        }
-        
-        # Auto-resolve spec path if not provided
-        if (-not $Spec) {
-            $resolvedSpec = Resolve-SpecPath -ConfigPath $ConfigPath
-            if ($resolvedSpec) {
-                $Spec = $resolvedSpec
-                Write-Log -Level "INFO" -Message "Using auto-resolved spec: $Spec"
-            } else {
-                Write-Log -Level "ERROR" -Message "Specification path required: -Spec <path> (or set WINSPEC_SPEC env var, or place default.ps1/config.ps1 in config directory)"
-                exit 1
-            }
-        }
-        
-        # Handle sandbox mode
-        $sandboxMode = "Live"
-        if ($Sandbox) {
-            $sandboxMode = $SandboxMode
-        }
-        elseif ($DryRun) {
-            $sandboxMode = "DryRun"
-        }
-        
-        # Enter sandbox if needed
-        if ($sandboxMode -ne "Live") {
-            Import-Module (Join-Path $Script:WinspecRoot "sandbox.psm1") -Force
-            Enter-Sandbox -Mode $sandboxMode -Profile $Profile
-            Write-Log -Level "INFO" -Message "=== SANDBOX MODE: $sandboxMode ==="
-            if ($sandboxMode -eq "Mock") {
-                Write-Log -Level "INFO" -Message "Using sandbox profile: $Profile"
-            }
-        }
-        
-        $result = Invoke-WinSpec -Spec $Spec -ConfigPath $ConfigPath -DryRun:$DryRun -Checkpoint:$Checkpoint -WithTriggers:$WithTriggers -SandboxMode:$Sandbox -SandboxProfile $Profile
-        
-        if (-not $result.Success) {
-            exit 1
-        }
-        
-        # Exit sandbox if entered
-        if ($sandboxMode -ne "Live") {
-            $changes = Get-SandboxChanges
-            if ($changes.Count -gt 0) {
-                Write-Host ""
-                Write-Host "=== Sandbox Changes Summary ==="
-                foreach ($change in $changes) {
-                    Write-Host "$($change.Provider): $($change.Details.Status)"
-                }
-            }
-            Exit-Sandbox -DiscardChanges:($sandboxMode -eq "DryRun")
-        }
-    }
-    
-    "trigger" {
-        # Check if help is requested via -Help flag
-        if ($Help) {
-            Show-Help -Command "trigger"
-            return
-        }
-        
-        Invoke-TriggerCommand -Trigger $Trigger -ConfigPath $ConfigPath -SpecPath $null
-    }
-    
     "status" {
         if ($Help) {
             Show-Help -Command "status"
             return
         }
         
-        Get-SystemStatus
+        Import-Module (Join-Path $PSScriptRoot "state.psm1") -Force
+        Import-Module (Join-Path $PSScriptRoot "utils.psm1") -Force
+        Import-Module (Join-Path $PSScriptRoot "logging.psm1") -Force
+
+        Write-Log INFO "Capturing system state..."
+
+        $systemState = Get-SystemState -Providers $Providers -NoCache:$NoCache
+        if (-not $systemState -or $systemState.Count -eq 0) {
+            Write-Log WARN "No system state captured"
+            return
+        }
+        Write-Log INFO "Captured providers: $($systemState.Keys -join ', ')"
+        if ($outputPath) {
+            if ($PSCmdlet.ShouldProcess($outputPath, "Save spec")) {
+                Save-Configuration `
+                    -Config $systemState `
+                    -Path $outputPath `
+                    -Format $Format
+            }
+        }
+        Write-LogHeader "System Status(JSON)"
+        $systemState | ConvertTo-Json -Depth 10
     }
     
     "rollback" {
@@ -895,64 +581,60 @@ switch ($Command) {
     }
     
     "validate" {
-        # Check if help is requested
         if ($Help) {
             Show-Help -Command "validate"
             return
         }
         
-        # Auto-resolve spec path if not provided
-        if (-not $Spec) {
-            $resolvedSpec = Resolve-SpecPath -ConfigPath $ConfigPath
-            if ($resolvedSpec) {
-                $Spec = $resolvedSpec
-                Write-Log -Level "INFO" -Message "Using auto-resolved spec: $Spec"
-            } else {
-                Write-Log -Level "ERROR" -Message "Specification path required: -Spec <path>"
-                exit 1
-            }
+        Import-Module (Join-Path $Script:WinspecRoot "utils.psm1") -Force
+        Import-Module (Join-Path $Script:WinspecRoot "logging.psm1") -Force
+        $specContent = Get-Spec -Path $Spec
+        if (Test-SpecSchema -Spec $specContent) {
+            Write-Log -Level OK -Message "Specification is valid"
         }
-        
-        $valid = Invoke-Validate -SpecPath $Spec -ConfigPath $ConfigPath
-        if (-not $valid) { exit 1 }
+        else {
+            Write-Log -Level ERROR -Message "Specification is invalid"
+            exit 1
+        }
     }
-    
-    "export" {
-        # Check if help is requested
+
+    "trigger" {
         if ($Help) {
-            Show-Help -Command "export"
+            Show-Help -Command "trigger"
             return
         }
         
-        # export is now an alias for pull - delegate to pull
-        Import-Module (Join-Path $Script:WinspecRoot "pull.psm1") -Force
-        $pullParams = @{
-            Format = $Format
-        }
-        if ($Output) { $pullParams['Output'] = $Output }
-        if ($Providers) { $pullParams['Providers'] = $Providers }
-        if ($Interactive) { $pullParams['Interactive'] = $true }
-        if ($Template) { $pullParams['Template'] = $true }
-        if ($Minimal) { $pullParams['Minimal'] = $true }
-        if ($Name) { $pullParams['Name'] = $Name }
-        if ($Description) { $pullParams['Description'] = $Description }
-        
-        Invoke-Pull @pullParams
+        $spec = Get-Spec -Path $Spec
+        $results = Invoke-Triggers `
+            -Config $spec `
+            -Triggers $Triggers `
+            -ConfigPath $ConfigPath
+
+        Write-Report -Results $results
     }
     
+    
     "pull" {
-        # Check if help is requested
         if ($Help) {
             Show-Help -Command "pull"
             return
         }
         
-        # pull - captures system state to file
         Import-Module (Join-Path $Script:WinspecRoot "pull.psm1") -Force
+        Import-Module (Join-Path $Script:WinspecRoot "utils.psm1") -Force
+        if (Test-Path ($Spec)) {
+            $specContent = Get-Spec $Spec
+        } else {
+            $specContent = @{}
+        }
         $pullParams = @{
-            Format = $Format
+            Spec    = $specContent
+            Format  = $Format
+            NoCache = $NoCache
+            Apply   = $Apply
         }
         if ($Output) { $pullParams['Output'] = $Output }
+        else { $pullParams['Output'] = $Spec }
         if ($Providers) { $pullParams['Providers'] = $Providers }
         if ($Interactive) { $pullParams['Interactive'] = $true }
         if ($Template) { $pullParams['Template'] = $true }
@@ -965,57 +647,47 @@ switch ($Command) {
     }
     
     "push" {
-        # Check if help is requested
         if ($Help) {
             Show-Help -Command "push"
             return
         }
         
-        # push - applies config to system
         Import-Module (Join-Path $Script:WinspecRoot "push.psm1") -Force
         $pushParams = @{
             Spec = $Spec
         }
-        if ($ConfigPath) { $pushParams['ConfigPath'] = $ConfigPath }
+        if ($Providers) { $pushParams['Providers'] = $Providers }
+        if ($Triggers) { $pushParams['Triggers'] = $Triggers }
         if ($DryRun) { $pushParams['DryRun'] = $true }
         if ($Checkpoint) { $pushParams['Checkpoint'] = $true }
-        if ($WithTriggers) { $pushParams['WithTriggers'] = $true }
-        if ($Providers) { $pushParams['Providers'] = $Providers }
         
         $result = Invoke-Push @pushParams
         if (-not $result.Success) { exit 1 }
     }
     
     "diff" {
-        # Check if help is requested
         if ($Help) {
             Show-Help -Command "diff"
             return
         }
         
-        # Auto-resolve spec path if not provided
-        if (-not $Spec) {
-            $resolvedSpec = Resolve-SpecPath -ConfigPath $ConfigPath
-            if ($resolvedSpec) {
-                $Spec = $resolvedSpec
-                Write-Log -Level "INFO" -Message "Using auto-resolved spec: $Spec"
-            } else {
-                Write-Log -Level "ERROR" -Message "Specification path required: -Spec <path>"
-                exit 1
-            }
-        }
-        
         Import-Module (Join-Path $Script:WinspecRoot "diff.psm1") -Force
-        $diffParams = @{
-            SpecPath = $Spec
+        Import-Module (Join-Path $Script:WinspecRoot "utils.psm1") -Force
+        Import-Module (Join-Path $Script:WinspecRoot "state.psm1") -Force
+        $specContent = Get-Spec -Path $Spec
+        if ($Against) {
+            $againstContent = Get-Spec -Path $Against
         }
-        if ($Against) { $diffParams['Against'] = $Against }
+        else {
+            $againstContent = Get-SystemState -Providers $Providers -NoCache:$NoCache
+        }
+        $diffParams = @{
+            Spec = $specContent
+        }
+        if ($Against) { $diffParams['Against'] = $againstContent }
         if ($Providers) { $diffParams['Providers'] = $Providers }
         
-        $differences = Compare-SystemState @diffParams
-        if ($differences) {
-            Write-Host (Format-DiffOutput -Differences $differences)
-        }
+        Invoke-Diff @diffParams
     }
     
     "merge" {
@@ -1036,12 +708,12 @@ switch ($Command) {
         
         Import-Module (Join-Path $Script:WinspecRoot "merge.psm1") -Force
         $mergeParams = @{
-            BasePath = $Base
+            BasePath     = $Base
             IncomingPath = $Incoming
-            Strategy = $Strategy
-            Interactive = $Interactive
+            Strategy     = $Strategy
+            Interactive  = $Interactive
         }
-        if ($MergeOutput) { $mergeParams['OutputPath'] = $MergeOutput }
+        if ($Output) { $mergeParams['OutputPath'] = $Output }
         
         $result = Merge-Configuration @mergeParams
         if ($result) {
@@ -1049,178 +721,6 @@ switch ($Command) {
             if (-not $result.Success) {
                 exit 1
             }
-        }
-    }
-    
-    "sync" {
-        # Check if help is requested
-        if ($Help) {
-            Show-Help -Command "sync"
-            return
-        }
-        
-        # Auto-resolve spec path if not provided
-        if (-not $Spec) {
-            $resolvedSpec = Resolve-SpecPath -ConfigPath $ConfigPath
-            if ($resolvedSpec) {
-                $Spec = $resolvedSpec
-                Write-Log -Level "INFO" -Message "Using auto-resolved spec: $Spec"
-            } else {
-                Write-Log -Level "ERROR" -Message "Specification path required: -Spec <path>"
-                exit 1
-            }
-        }
-        
-        # sync uses pull + push workflow - first pull system state, then push changes
-        Import-Module (Join-Path $Script:WinspecRoot "pull.psm1") -Force
-        Import-Module (Join-Path $Script:WinspecRoot "push.psm1") -Force
-        
-        # Get system state
-        $systemState = Get-SystemState
-        
-        # Load config spec
-        $configSpec = Import-Configuration -Path $Spec
-        
-        # Compare
-        $differences = Compare-SystemState -SpecPath $Spec -Against $null -Providers $Providers
-        
-        if ($differences.Count -eq 0) {
-            Write-Log -Level "OK" -Message "System is already in sync with configuration"
-            return
-        }
-        
-        Write-Log -Level "INFO" -Message "Found $($differences.Count) differences to resolve"
-        
-        if ($SyncInteractive) {
-            # Interactive mode - prompt for each difference
-            foreach ($diff in $differences) {
-                Write-Host ""
-                switch ($diff.Type) {
-                    "Added" {
-                        Write-Host "Item in config, not in system: $($diff.Path)" -ForegroundColor Yellow
-                    }
-                    "Removed" {
-                        Write-Host "Item in system, not in config: $($diff.Path)" -ForegroundColor Yellow
-                    }
-                    "Changed" {
-                        Write-Host "Value mismatch: $($diff.Path)" -ForegroundColor Yellow
-                    }
-                }
-                
-                $choice = Read-Host "Resolve? [A]pply to system, [S]kip (or Enter for apply)"
-                if ($choice -eq "s" -or $choice -eq "skip") {
-                    continue
-                }
-                # Default: apply to system (push)
-                $null = Invoke-Push -Spec $Spec -Providers $Providers
-            }
-        }
-        else {
-            # Non-interactive: show differences and prompt to push
-            Write-Host "Run 'winspec push -Spec $Spec' to apply changes" -ForegroundColor Cyan
-        }
-    }
-    
-    "init" {
-        # init is now an alias for pull
-        if ($Help) {
-            Show-Help -Command "init"
-            return
-        }
-        
-        # Delegate to pull (same functionality as init)
-        Import-Module (Join-Path $Script:WinspecRoot "pull.psm1") -Force
-        $pullParams = @{
-            Format = $Format
-        }
-        if ($Output) { $pullParams['Output'] = $Output }
-        if ($Providers) { $pullParams['Providers'] = $Providers }
-        if ($Interactive) { $pullParams['Interactive'] = $true }
-        if ($Template) { $pullParams['Template'] = $true }
-        if ($Minimal) { $pullParams['Minimal'] = $true }
-        if ($Name) { $pullParams['Name'] = $Name }
-        if ($Description) { $pullParams['Description'] = $Description }
-        if ($DryRun) { $pullParams['DryRun'] = $true }
-        
-        Invoke-Pull @pullParams
-    }
-    
-    "sandbox" {
-        
-        # Resolve output path using config location resolution
-        if ($Output) {
-            $initParams['OutputPath'] = $Output
-        }
-        else {
-            # Use WinSpec config location resolution:
-            # 1. ConfigPath argument, 2. WINSPEC_CONFIG env, 3. ~/.config/winspec/, 4. current directory
-            $configLocation = Resolve-ConfigLocation -ConfigPath $ConfigPath
-            
-            # Determine the config directory
-            $configDir = $null
-            if ($configLocation) {
-                if (Test-Path $configLocation) {
-                    $item = Get-Item $configLocation
-                    if ($item -is [System.IO.FileInfo]) {
-                        $configDir = Split-Path -Parent $configLocation
-                    }
-                    else {
-                        $configDir = $configLocation
-                    }
-                }
-                else {
-                    if ([System.IO.Path]::HasExtension($configLocation)) {
-                        $configDir = Split-Path -Parent $configLocation
-                    }
-                    else {
-                        $configDir = $configLocation
-                    }
-                }
-            }
-            
-            # Ensure directory exists
-            if ($configDir -and -not (Test-Path $configDir)) {
-                New-Item -ItemType Directory -Path $configDir -Force | Out-Null
-            }
-            
-            # Determine default output filename - avoid overwriting the script itself
-            $defaultFilename = ".winspec.ps1"
-            $scriptDir = $Script:WinspecRoot
-            
-            if ($configDir) {
-                # Check if the target directory is the same as where the script lives
-                # to avoid overwriting the script itself
-                $resolvedConfigDir = (Resolve-Path $configDir -ErrorAction SilentlyContinue).Path
-                $resolvedScriptDir = (Resolve-Path $scriptDir -ErrorAction SilentlyContinue).Path
-                
-                if ($resolvedConfigDir -and $resolvedScriptDir -and 
-                    $resolvedConfigDir.Equals($resolvedScriptDir, [StringComparison]::OrdinalIgnoreCase)) {
-                    # We're in the WinSpec installation directory - use user config instead
-                    $userConfigDir = Join-Path $env:USERPROFILE ".config\winspec"
-                    if (-not (Test-Path $userConfigDir)) {
-                        New-Item -ItemType Directory -Path $userConfigDir -Force | Out-Null
-                    }
-                    $configDir = $userConfigDir
-                    Write-Log -Level "INFO" -Message "Using user config directory: $userConfigDir"
-                }
-                
-                $initParams['OutputPath'] = Join-Path $configDir $defaultFilename
-            }
-            else {
-                $initParams['OutputPath'] = $defaultFilename
-            }
-        }
-        
-        if ($Providers) { $initParams['Providers'] = $Providers }
-        if ($Interactive) { $initParams['Interactive'] = $true }
-        if ($Template) { $initParams['Template'] = $true }
-        if ($Minimal) { $initParams['Minimal'] = $true }
-        if ($Name) { $initParams['Name'] = $Name }
-        if ($Description) { $initParams['Description'] = $Description }
-        
-        $result = Initialize-WinSpecConfig @initParams
-        if (-not $result) {
-            exit 1
         }
     }
     

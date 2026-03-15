@@ -5,189 +5,96 @@
 Import-Module (Join-Path $PSScriptRoot "logging.psm1") -Force
 
 # =============================================================================
-# VALUE FORMATTING - Unified value formatting for display
-# =============================================================================
-
-function ConvertTo-DisplayValue {
-    <#
-    .SYNOPSIS
-        Converts a value to a human-readable display format.
-    .DESCRIPTION
-        Unified function for formatting values in diff, merge, and sync displays.
-        Handles null, hashtables, arrays, and primitive types.
-    .PARAMETER Value
-        The value to format.
-    .PARAMETER Compact
-        If specified, uses compact format for arrays (truncates long arrays).
-    #>
-    param(
-        $Value,
-        [switch]$Compact
-    )
-    
-    if ($null -eq $Value) {
-        return "<null>"
-    }
-    
-    if ($Value -is [hashtable]) {
-        $entries = $Value.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }
-        return "{ $($entries -join ', ') }"
-    }
-    
-    if ($Value -is [array]) {
-        if ($Compact -and $Value.Count -gt 5) {
-            return "@($($Value[0..4] -join ', ')... and $($Value.Count - 5) more)"
-        }
-        return "@($($Value -join ', '))"
-    }
-    
-    if ($Value -is [bool]) {
-        return $Value.ToString().ToLower()
-    }
-    
-    return $Value.ToString()
-}
-
-function ConvertTo-DetailedDisplayValue {
-    <#
-    .SYNOPSIS
-        Converts a value to detailed display format with nested structure.
-    .DESCRIPTION
-        Used for conflict resolution displays where nested structure matters.
-        Handles hashtables with proper indentation and recursion.
-    .PARAMETER Value
-        The value to format.
-    #>
-    param($Value)
-    
-    if ($null -eq $Value) {
-        return "<null>"
-    }
-    
-    if ($Value -is [hashtable]) {
-        if ($Value.Count -eq 0) {
-            return "@{}"
-        }
-        $lines = @()
-        foreach ($key in $Value.Keys) {
-            $lines += "  $key = $(ConvertTo-DetailedDisplayValue -Value $Value[$key])"
-        }
-        return "@{`n$($lines -join "`n")`n}"
-    }
-    
-    if ($Value -is [array]) {
-        if ($Value.Count -eq 0) {
-            return "@()"
-        }
-        $items = $Value | ForEach-Object { ConvertTo-DetailedDisplayValue -Value $_ }
-        return "@($($items -join ', '))"
-    }
-    
-    if ($Value -is [string]) {
-        return '"' + $Value + '"'
-    }
-    
-    if ($Value -is [bool]) {
-        return '$' + $Value.ToString().ToLower()
-    }
-    
-    return $Value.ToString()
-}
-
-# =============================================================================
 # HASHTABLE EXPORT - Unified hashtable-to-string conversion
 # =============================================================================
 
 function ConvertTo-HashtableString {
-    <#
-    .SYNOPSIS
-        Converts a hashtable to PowerShell code string representation.
-    .DESCRIPTION
-        Unified function for exporting hashtables as PowerShell code.
-        Used by both merge and sync modules.
-    .PARAMETER Hashtable
-        The hashtable to convert.
-    .PARAMETER IndentLevel
-        Current indentation level for nested structures.
-    #>
     param(
+        [Parameter(Mandatory)]
         [hashtable]$Hashtable,
+
         [int]$IndentLevel = 0
     )
-    
-    $indent = "    " * $IndentLevel
+
+    $indent      = "    " * $IndentLevel
+    $innerIndent = "    " * ($IndentLevel + 1)
+
     $lines = @()
-    
-    if ($IndentLevel -eq 0) {
-        $lines += "@{"
-    }
-    
-    foreach ($key in $Hashtable.Keys) {
+    $lines += "$indent@{"
+
+    foreach ($key in ($Hashtable.Keys | Sort-Object)) {
+
         $value = $Hashtable[$key]
-        $formattedValue = ConvertTo-PowerShellValue -Value $value -IndentLevel ($IndentLevel + 1)
-        $lines += "$indent    $key = $formattedValue"
+
+        $safeKey = if ($key -match '^[a-zA-Z_][a-zA-Z0-9_]*$') {
+            $key
+        }
+        else {
+            "'" + ($key -replace "'", "''") + "'"
+        }
+
+        if ($value -is [hashtable]) {
+            $lines += "$innerIndent$safeKey ="
+            $nested = ConvertTo-HashtableString -Hashtable $value -IndentLevel ($IndentLevel + 1)
+            $lines += $nested
+        }
+        else {
+            $formattedValue = ConvertTo-PowerShellValue `
+                -Value $value `
+                -IndentLevel ($IndentLevel + 1)
+
+            $lines += "$innerIndent$safeKey = $formattedValue"
+        }
     }
-    
-    if ($IndentLevel -eq 0) {
-        $lines += "}"
-    }
-    
-    return $lines -join "`n"
+
+    $lines += "$indent}"
+
+    return ($lines -join "`n")
 }
 
 function ConvertTo-PowerShellValue {
-    <#
-    .SYNOPSIS
-        Converts a value to PowerShell code string for export.
-    .DESCRIPTION
-        Handles all PowerShell types including null, bool, numbers, strings,
-        arrays, and nested hashtables with proper escaping.
-    .PARAMETER Value
-        The value to convert.
-    .PARAMETER IndentLevel
-        Current indentation level for nested structures.
-    #>
     param(
         $Value,
         [int]$IndentLevel = 0
     )
-    
-    $indent = "    " * $IndentLevel
-    
+
     if ($null -eq $Value) {
         return '$null'
     }
-    
+
     if ($Value -is [bool]) {
         return '$' + $Value.ToString().ToLower()
     }
-    
+
     if ($Value -is [int] -or $Value -is [long] -or $Value -is [double]) {
         return $Value.ToString()
     }
-    
+
     if ($Value -is [string]) {
         return '"' + $Value.Replace('"', '""') + '"'
     }
-    
+
     if ($Value -is [array]) {
+
         if ($Value.Count -eq 0) {
             return '@()'
         }
-        $items = $Value | ForEach-Object { ConvertTo-PowerShellValue -Value $_ -IndentLevel $IndentLevel }
-        return "@($($items -join ', '))"
-    }
-    
-    if ($Value -is [hashtable]) {
-        $lines = @("@{`n")
-        foreach ($key in $Value.Keys) {
-            $formattedValue = ConvertTo-PowerShellValue -Value $Value[$key] -IndentLevel ($IndentLevel + 1)
-            $lines += "$indent    $key = $formattedValue`n"
+
+        $indent      = "    " * $IndentLevel
+        $innerIndent = "    " * ($IndentLevel + 1)
+
+        $items = $Value | ForEach-Object {
+            $v = ConvertTo-PowerShellValue -Value $_ -IndentLevel ($IndentLevel + 1)
+            "$innerIndent$v"
         }
-        $lines += "$indent}"
-        return $lines -join ""
+
+        return "@(`n$($items -join "`n")`n$indent)"
     }
-    
+
+    if ($Value -is [hashtable]) {
+        return ConvertTo-HashtableString -Hashtable $Value -IndentLevel $IndentLevel
+    }
+
     return '"' + $Value.ToString() + '"'
 }
 
@@ -274,123 +181,6 @@ function Import-Configuration {
     }
 }
 
-# Alias for backward compatibility with core.psm1
-function Import-Spec {
-    <#
-    .SYNOPSIS
-        Alias for Import-Configuration for backward compatibility.
-    #>
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$Path
-    )
-    return Import-Configuration -Path $Path
-}
-
-# =============================================================================
-# HASHTABLE UTILITIES
-# =============================================================================
-
-function Copy-Hashtable {
-    <#
-    .SYNOPSIS
-        Creates a deep copy of a hashtable.
-    .DESCRIPTION
-        Recursively copies all nested hashtables and arrays.
-    .PARAMETER Source
-        The source hashtable to copy.
-    .OUTPUTS
-        A deep copy of the hashtable.
-    #>
-    param([hashtable]$Source)
-    
-    $copy = @{}
-    foreach ($key in $Source.Keys) {
-        $value = $Source[$key]
-        if ($value -is [hashtable]) {
-            $copy[$key] = Copy-Hashtable -Source $value
-        }
-        elseif ($value -is [array]) {
-            $copy[$key] = @($value)
-        }
-        else {
-            $copy[$key] = $value
-        }
-    }
-    return $copy
-}
-
-function Add-ToConfigPath {
-    <#
-    .SYNOPSIS
-        Adds a value to configuration at the specified path.
-    .DESCRIPTION
-        Supports dot-notation paths (e.g., "Package.git") for nested config.
-    .PARAMETER Config
-        The configuration hashtable to modify.
-    .PARAMETER Path
-        Dot-separated path to the value location.
-    .PARAMETER Value
-        The value to add.
-    .OUTPUTS
-        The modified configuration.
-    #>
-    param(
-        [hashtable]$Config,
-        [string]$Path,
-        $Value
-    )
-    
-    $parts = $Path.Split('.')
-    $current = $Config
-    
-    for ($i = 0; $i -lt $parts.Count - 1; $i++) {
-        $part = $parts[$i]
-        if (-not $current.ContainsKey($part)) {
-            $current[$part] = @{}
-        }
-        $current = $current[$part]
-    }
-    
-    $current[$parts[-1]] = $Value
-    return $Config
-}
-
-function Remove-FromConfigPath {
-    <#
-    .SYNOPSIS
-        Removes a value from configuration at the specified path.
-    .DESCRIPTION
-        Supports dot-notation paths for nested config removal.
-    .PARAMETER Config
-        The configuration hashtable to modify.
-    .PARAMETER Path
-        Dot-separated path to the value to remove.
-    .OUTPUTS
-        The modified configuration.
-    #>
-    param(
-        [hashtable]$Config,
-        [string]$Path
-    )
-    
-    $parts = $Path.Split('.')
-    $current = $Config
-    
-    for ($i = 0; $i -lt $parts.Count - 1; $i++) {
-        $part = $parts[$i]
-        if (-not $current.ContainsKey($part)) {
-            return $Config
-        }
-        $current = $current[$part]
-    }
-    
-    if ($current.ContainsKey($parts[-1])) {
-        $current.Remove($parts[-1])
-    }
-    
-    return $Config
-}
 
 # =============================================================================
 # VALUE EQUALITY TESTING
@@ -406,10 +196,26 @@ function Test-ValuesEqual {
         First value to compare.
     .PARAMETER Value2
         Second value to compare.
+    .PARAMETER MaxDepth
+        Maximum recursion depth to prevent stack overflow on circular refs.
+        Default is 10.
+    .PARAMETER CurrentDepth
+        Internal parameter tracking current recursion depth.
     .OUTPUTS
         Boolean indicating equality.
     #>
-    param($Value1, $Value2)
+    param(
+        $Value1,
+        $Value2,
+        [int]$MaxDepth = 10,
+        [int]$CurrentDepth = 0
+    )
+    
+    # Check recursion depth
+    if ($CurrentDepth -gt $MaxDepth) {
+        Write-Verbose "Test-ValuesEqual: Max depth ($MaxDepth) exceeded"
+        return $false
+    }
     
     if (-not $Value1 -and -not $Value2) {
         return $true
@@ -434,7 +240,7 @@ function Test-ValuesEqual {
             if (-not $Value2.ContainsKey($key)) {
                 return $false
             }
-            if (-not (Test-ValuesEqual -Value1 $Value1[$key] -Value2 $Value2[$key])) {
+            if (-not (Test-ValuesEqual -Value1 $Value1[$key] -Value2 $Value2[$key] -MaxDepth $MaxDepth -CurrentDepth ($CurrentDepth + 1))) {
                 return $false
             }
         }
@@ -446,7 +252,7 @@ function Test-ValuesEqual {
             return $false
         }
         for ($i = 0; $i -lt $Value1.Count; $i++) {
-            if (-not (Test-ValuesEqual -Value1 $Value1[$i] -Value2 $Value2[$i])) {
+            if (-not (Test-ValuesEqual -Value1 $Value1[$i] -Value2 $Value2[$i] -MaxDepth $MaxDepth -CurrentDepth ($CurrentDepth + 1))) {
                 return $false
             }
         }
@@ -520,135 +326,280 @@ function Merge-Hashtables {
 $DefaultConfigFilename = ".winspec.ps1"
 $UserConfigDir = Join-Path $env:USERPROFILE ".config\winspec"
 
-function Resolve-ConfigPath {
-    <#
-    .SYNOPSIS
-        Resolves the output path for config operations.
-    .DESCRIPTION
-        Determines where to save config files. Priority:
-        1. Explicit OutputPath parameter
-        2. WINSPEC_CONFIG environment variable
-        3. User config directory (~/.config/winspec/)
-        4. Current directory
-    .PARAMETER OutputPath
-        Explicit output path if provided.
-    .OUTPUTS
-        Resolved path string.
-    #>
-    [CmdletBinding()]
+function Resolve-Candidate {
     param(
-        [Parameter(Mandatory = $false)]
-        [string]$OutputPath
+        [string]$candidate
     )
-    
-    # If explicit path provided and not empty, use it
-    if (-not [string]::IsNullOrWhiteSpace($OutputPath)) {
-        return $OutputPath
+    if ([string]::IsNullOrWhiteSpace($candidate)) { return $null }
+
+    if (Test-Path $candidate -PathType Container) {
+        $candidate = Join-Path $candidate $DefaultConfigFilename
     }
-    
-    # Check environment variable
-    if ($env:WINSPEC_CONFIG) {
-        $configPath = $env:WINSPEC_CONFIG
-        if (Test-Path $configPath -PathType Container) {
-            return Join-Path $configPath $DefaultConfigFilename
-        }
-        if ([System.IO.Path]::HasExtension($configPath)) {
-            return $configPath
-        }
-        return Join-Path $configPath $DefaultConfigFilename
+
+    if (Test-Path $candidate) {
+        return (Resolve-Path $candidate).Path
     }
-    
-    # Use user config directory (create if needed)
-    if (-not (Test-Path $UserConfigDir)) {
-        try {
-            New-Item -ItemType Directory -Path $UserConfigDir -Force | Out-Null
-        }
-        catch {
-            Write-Log -Level "WARN" -Message "Cannot create user config directory. Using current directory."
-            return Join-Path (Get-Location) $DefaultConfigFilename
-        }
-    }
-    
-    return Join-Path $UserConfigDir $DefaultConfigFilename
+
+    return $null
 }
 
 function Resolve-SpecPath {
+    [CmdletBinding()]
+    param(
+        [string]$Path
+    )
+
+    $candidates = @(
+        $Path
+        $env:WINSPEC_CONFIG
+        (Join-Path $UserConfigDir $DefaultConfigFilename)
+        (Join-Path (Get-Location) $DefaultConfigFilename)
+    )
+
+    foreach ($c in $candidates) {
+        $resolved = Resolve-Candidate $c
+        if ($resolved) { return $resolved }
+    }
+
+    $defaultPath = Join-Path $UserConfigDir $DefaultConfigFilename
+    Write-Log -Level "WARN" -Message "No existing spec file found. Falling back to default user config path: $defaultPath"
+    return $defaultPath
+}
+
+
+function Resolve-Spec {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$Config,
+
+        [string]$BasePath = $PWD
+    )
+
+    $result = @{}
+
+    foreach ($import in ($Config.Import ?? @())) {
+        $path = if ([System.IO.Path]::IsPathRooted($import)) {
+            $import
+        }
+        else {
+            Join-Path $BasePath $import
+        }
+
+        $importConfig = Import-Configuration $path
+
+        if ($importConfig) {
+            $resolvedImport = Resolve-Spec `
+                -Config $importConfig `
+                -BasePath (Split-Path $path -Parent)
+
+            $result = Merge-Hashtables $result $resolvedImport
+        }
+    }
+
+    $result = Merge-Hashtables $result $Config
+    $result.Remove("Import")
+
+    return $result
+}
+
+function Get-Spec {
+    [CmdletBinding()]
+    param(
+        [string]$Path
+    )
+
+    $specPath = Resolve-SpecPath $Path
+    if (-not $specPath) { return $null }
+
+    Write-Log "INFO" "Loading configuration: $specPath"
+
+    $config = Import-Configuration $specPath
+    if (-not $config) {
+        Write-Log "ERROR" "Failed to load specification"
+        return $null
+    }
+
+    return Resolve-Spec `
+        -Config $config `
+        -BasePath (Split-Path $specPath -Parent)
+}
+
+# =============================================================================
+# PACKAGE STATE MERGE - Shared utilities for package managers
+# =============================================================================
+
+function Merge-PackageState {
     <#
     .SYNOPSIS
-        Resolves the spec/config file path for operations.
+        Generic package state merge for package managers.
     .DESCRIPTION
-        Auto-resolves spec path: explicit > config env var > default.
-    .PARAMETER Spec
-        Explicit spec path.
-    .PARAMETER ConfigPath
-        Optional config directory path.
+        Merges system package state with existing config, preserving user metadata
+        like flags, versions, and other per-package settings. Uses ArrayList for
+        efficient O(n) performance instead of O(n²) array concatenation.
+    .PARAMETER SystemState
+        Hashtable with Installed and/or Packages arrays from system
+    .PARAMETER ExistingConfig
+        Hashtable with Installed and/or Packages arrays from config
     .OUTPUTS
-        Resolved spec path string.
+        Hashtable with Installed and Packages arrays
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [hashtable]$SystemState,
+        
+        [Parameter(Mandatory = $true)]
+        [hashtable]$ExistingConfig
+    )
+    
+    # Build lookup from existing packages (preserves user metadata)
+    $existingPkgs = @{}
+    if ($ExistingConfig.Packages) {
+        foreach ($p in $ExistingConfig.Packages) {
+            if ($p.Name) {
+                $existingPkgs[$p.Name] = $p
+            }
+        }
+    }
+    elseif ($ExistingConfig.Installed) {
+        foreach ($p in $ExistingConfig.Installed) {
+            $id = if ($p -is [hashtable] -and $p.Name) { $p.Name } else { $p }
+            $existingPkgs[$id] = if ($p -is [hashtable]) { $p } else { @{ Name = $id } }
+        }
+    }
+    
+    # Build lookup from system packages
+    $systemPkgs = @{}
+    if ($SystemState.Packages) {
+        foreach ($p in $SystemState.Packages) {
+            if ($p.Name) {
+                $systemPkgs[$p.Name] = $p
+            }
+        }
+    }
+    elseif ($SystemState.Installed) {
+        foreach ($p in $SystemState.Installed) {
+            $id = if ($p -is [hashtable] -and $p.Name) { $p.Name } else { $p }
+            $systemPkgs[$id] = if ($p -is [hashtable]) { $p } else { @{ Name = $id } }
+        }
+    }
+    
+    # Merge: prefer existing (preserves flags), add new from system
+    # Use ArrayList for O(1) amortized append
+    $mergedList = [System.Collections.ArrayList]::new()
+    $allIds = @($existingPkgs.Keys) + @($systemPkgs.Keys) | Select-Object -Unique
+    
+    foreach ($id in $allIds) {
+        if ($existingPkgs.ContainsKey($id)) {
+            [void]$mergedList.Add($existingPkgs[$id])
+        }
+        elseif ($systemPkgs.ContainsKey($id)) {
+            [void]$mergedList.Add($systemPkgs[$id])
+        }
+    }
+    
+    $result = @{}
+    if ($mergedList.Count -gt 0) {
+        $result.Installed = $mergedList | ForEach-Object { 
+            if ($_ -is [string]) { $_ } else { $_.Name } 
+        }
+        $result.Packages = $mergedList.ToArray()
+    }
+    
+    return $result
+}
+
+function Merge-SourceCollection {
+    <#
+    .SYNOPSIS
+        Generic source/bucket merge for package managers.
+    .DESCRIPTION
+        Merges system sources with existing config. Existing sources take precedence
+        to preserve user customizations (e.g., custom bucket URLs).
+    .PARAMETER SystemSources
+        Array of source objects from system
+    .PARAMETER ExistingSources
+        Array of source objects from config
+    .PARAMETER NameKey
+        Property name to use as key (default: "Name")
+    .OUTPUTS
+        Array of merged source objects
     #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $false)]
-        [string]$Spec,
+        [array]$SystemSources,
         
         [Parameter(Mandatory = $false)]
-        [string]$ConfigPath
+        [array]$ExistingSources,
+        
+        [Parameter(Mandatory = $false)]
+        [string]$NameKey = "Name"
     )
     
-    # If explicit spec provided, use it
-    if (-not [string]::IsNullOrWhiteSpace($Spec)) {
-        if (Test-Path $Spec) {
-            return $Spec
-        }
-        # Try as relative path
-        $fullPath = Join-Path (Get-Location) $Spec
-        if (Test-Path $fullPath) {
-            return $fullPath
-        }
-        Write-Log -Level "ERROR" -Message "Spec file not found: $Spec"
-        return $null
-    }
+    # Use hashtable for O(1) lookup
+    $merged = @{}
     
-    # Check WINSPEC_CONFIG environment variable
-    if ($env:WINSPEC_CONFIG) {
-        $configPath = $env:WINSPEC_CONFIG
-        if (Test-Path $configPath -PathType Container) {
-            $specPath = Join-Path $configPath $DefaultConfigFilename
-            if (Test-Path $specPath) {
-                return $specPath
+    # Add system sources first
+    if ($SystemSources) {
+        foreach ($s in $SystemSources) {
+            if ($s.$NameKey) {
+                $merged[$s.$NameKey] = $s
             }
         }
-        elseif ([System.IO.Path]::HasExtension($configPath) -and (Test-Path $configPath)) {
-            return $configPath
-        }
     }
     
-    # Use ConfigPath if provided
-    if (-not [string]::IsNullOrWhiteSpace($ConfigPath)) {
-        if (Test-Path $ConfigPath -PathType Container) {
-            $specPath = Join-Path $ConfigPath $DefaultConfigFilename
-            if (Test-Path $specPath) {
-                return $specPath
+    # Add existing sources (skip if already exists - existing takes precedence)
+    if ($ExistingSources) {
+        foreach ($s in $ExistingSources) {
+            if ($s.$NameKey -and -not $merged.ContainsKey($s.$NameKey)) {
+                $merged[$s.$NameKey] = $s
             }
         }
-        elseif (Test-Path $ConfigPath) {
-            return $ConfigPath
-        }
     }
     
-    # Fall back to user config directory
-    $userSpecPath = Join-Path $UserConfigDir $DefaultConfigFilename
-    if (Test-Path $userSpecPath) {
-        return $userSpecPath
+    if ($merged.Count -gt 0) {
+        return $merged.Values
     }
-    
-    # Fall back to current directory
-    $currentSpecPath = Join-Path (Get-Location) $DefaultConfigFilename
-    if (Test-Path $currentSpecPath) {
-        return $currentSpecPath
+    return @()
+}
+
+# =============================================================================
+# PRIVILEGE ELEVATION
+# =============================================================================
+function Test-IsAdmin {
+
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = [Security.Principal.WindowsPrincipal] $identity
+
+    return $principal.IsInRole(
+        [Security.Principal.WindowsBuiltInRole]::Administrator
+    )
+}
+
+function Invoke-AdminCommand {
+    param(
+        [scriptblock]$Script
+    )
+
+    if (Test-IsAdmin) {
+        return & $Script
     }
-    
-    Write-Log -Level "ERROR" -Message "No spec file found. Use -Spec to specify a config file."
-    return $null
+
+    $scriptFile = [System.IO.Path]::GetTempFileName() + ".ps1"
+
+    try {
+        $Script.ToString() | Set-Content $scriptFile -Encoding UTF8
+
+        Start-Process powershell `
+            -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$scriptFile`"" `
+            -Verb RunAs `
+            -Wait
+    }
+    finally {
+        Remove-Item $scriptFile -ErrorAction SilentlyContinue
+    }
 }
 
 # =============================================================================
@@ -656,18 +607,21 @@ function Resolve-SpecPath {
 # =============================================================================
 
 Export-ModuleMember -Function @(
-    "Resolve-ConfigPath"
-    "Resolve-SpecPath"
-    "ConvertTo-DisplayValue"
-    "ConvertTo-DetailedDisplayValue"
-    "ConvertTo-HashtableString"
-    "ConvertTo-PowerShellValue"
+    # config
     "Save-Configuration"
     "Import-Configuration"
-    "Import-Spec"
-    "Copy-Hashtable"
-    "Add-ToConfigPath"
-    "Remove-FromConfigPath"
+    "Resolve-Candidate"
+    "Resolve-SpecPath"
+    "Get-Spec"
+    # display
+    "ConvertTo-HashtableString"
+    "ConvertTo-PowerShellValue"
+    # data
     "Test-ValuesEqual"
     "Merge-Hashtables"
+    "Merge-PackageState"
+    "Merge-SourceCollection"
+    # admin
+    "Test-IsAdmin"
+    "Invoke-AdminCommand"
 )

@@ -8,7 +8,7 @@ BeforeAll {
     Import-Module (Join-Path $ModuleRoot "logging.psm1") -Force
     Import-Module (Join-Path $ModuleRoot "utils.psm1") -Force
     Import-Module (Join-Path $ModuleRoot "registry-maps.psm1") -Force
-    Import-Module (Join-Path $ModuleRoot "exec.psm1") -Force
+    Import-Module (Join-Path $ModuleRoot "state.psm1") -Force
     Import-Module $ModulePath -Force
 }
 
