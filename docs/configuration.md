@@ -120,7 +120,7 @@ Triggers execute **one-time, non-idempotent actions**.
 
 ```powershell
 Trigger = @(
-    @{ Name = "TriggerName" [; Value = ...] [; Path = "..."] [; Enabled = $true/$false] }
+    @{ Name = "TriggerName" [; Value = ...] [; Path = "..."] }
 )
 ```
 
@@ -155,42 +155,38 @@ When you specify `@{ Name = "my-trigger" }`, WinSpec searches in this order:
 Create a PowerShell script that accepts parameters and returns a status hashtable:
 
 ```powershell
-# triggers/my-trigger.ps1
-param(
-    [Parameter(Mandatory = $false)]
-    $Value = $true,
-    [switch]$WhatIf
+# triggers/my-trigger.psm1
+Import-Module (Join-Path $PSScriptRoot "..\your_module.psm1") -Force
+
+function Get-ProviderInfo {
+    return @{
+        Name = "MyTrigger"
+        Type = "Trigger"
+    }
+}
+
+function Invoke-Trigger {
+    param (
+        $Option = $true
+    )
+
+    return @{
+        Status  = "Success"
+        Message = "Trigger executed successfully"
+    }
+}
+
+
+Export-ModuleMember -Function @(
+    "Get-ProviderInfo"
+    "Invoke-Trigger"
 )
-
-# Dry-run mode
-if ($WhatIf) {
-    return @{ 
-        Status = "DryRun" 
-        Message = "Would execute my-trigger with value: $Value" 
-    }
-}
-
-# Your custom logic here
-try {
-    # Do something useful
-    Write-Host "Executing with value: $Value"
-    
-    return @{ 
-        Status = "Success" 
-        Message = "Completed successfully" 
-    }
-}
-catch {
-    return @{ 
-        Status = "Error" 
-        Message = $_.Exception.Message 
-    }
-}
 ```
 
 **Trigger Script Requirements:**
-- Accept `$Value` parameter (any type)
-- Support `-WhatIf` switch for dry-run
+- Accept `Invoke-Trigger`(fixed identifier) function
+- Accept `$Option`(fixed identifier) parameter (any type)
+- Support `-WhatIf` switch for dry run
 - Return hashtable with `Status` key: `"Success"`, `"Error"`, `"DryRun"`, `"Skipped"`
 - Optionally include `Message` for details
 

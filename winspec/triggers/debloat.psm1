@@ -10,7 +10,7 @@ function Get-ProviderInfo {
     }
 }
 
-function Invoke-DebloatTrigger {
+function Invoke-Trigger {
     [CmdletBinding(SupportsShouldProcess = $true)]
     param (
         [Parameter(Mandatory = $false)]

@@ -4,11 +4,7 @@
 
 [CmdletBinding(DefaultParameterSetName = "Default")]
 param (
-    [Parameter(Position = 0, ParameterSetName = "Diff")]
-    [Parameter(Position = 0, ParameterSetName = "Merge")]
-    [Parameter(Position = 0, ParameterSetName = "Rollback")]
-    [Parameter(Position = 0, ParameterSetName = "Sandbox")]
-    [Parameter(Position = 0, ParameterSetName = "Default")]
+    [Parameter(Position = 0)]
     [ValidateSet("pull", "push", "diff", "merge", "status", "rollback", "providers", "validate", "trigger", "sandbox", "help")]
     [string]$Command = "help",
     
@@ -23,8 +19,7 @@ param (
     [switch]$NoCache = $False,
     
     # "*", string, array
-    [Parameter(ParameterSetName = "Push")]
-    [Parameter(ParameterSetName = "Trigger", Position = 1)]
+    [Parameter(Position = 1)]
     $Triggers,
     
     [Parameter(ParameterSetName = "Rollback")]
@@ -59,7 +54,7 @@ param (
     
     [Parameter(ParameterSetName = "Merge")]
     [Parameter(ParameterSetName = "Pull")]
-    [switch]$Interactive,
+    [switch]$Interactive = $False,
     
     [switch]$Apply = $False,
 
@@ -79,16 +74,19 @@ param (
 $ErrorActionPreference = 'Stop'
 $Script:WinspecRoot = $PSScriptRoot
 
+$global:VerbosePreference = if ($PSBoundParameters['Verbose']) { 'Continue' } else { 'SilentlyContinue' }
+$global:DebugPreference = if ($PSBoundParameters['Debug']) { 'Continue' } else { 'SilentlyContinue' }
+
 # Import core modules first so functions can use them
 $modules = @(
+    "logging.psm1"
     "utils.psm1"
     "state.psm1"
-    "logging.psm1"
     "schema.psm1"
     "checkpoint.psm1"
 )
 foreach ($m in $modules) {
-    Import-Module (Join-Path $Script:WinspecRoot $m) -ErrorAction Stop
+    Import-Module (Join-Path $Script:WinspecRoot $m) -ErrorAction Stop -Force
 }
 
 $Spec = Resolve-SpecPath $Spec
@@ -121,15 +119,12 @@ OPTIONS:
     -Trigger <input>      Trigger configuration:
                           - Array: @("name1", "name2")
                           - String: "name"
-                          - Omit: run all discovered triggers
+                          - "*": run all discovered triggers
     -Spec <path>          Path to specification file
 
 EXAMPLES:
     # Run all available triggers
-    winspec trigger
-
-    # Run specific triggers with options (hashtable)
-    winspec trigger -Trigger @{ activation = "KMS38"; debloat = @{ Silent = $true } }
+    winspec trigger *
     
     # Run multiple triggers with default options (array)
     winspec trigger -Trigger @("activation", "debloat")
@@ -482,7 +477,6 @@ function Show-Providers {
     
     Write-Debug "Config Path: $ConfigPath"
     Write-LogHeader "Available Providers"
-
     $categories = @(
         @{ Name = "Declarative (Idempotent):"; Type = "Declarative"; Folder = "managers" }
         @{ Name = "Trigger (Non-Idempotent):"; Type = "Trigger"; Folder = "triggers" }
@@ -495,6 +489,7 @@ function Show-Providers {
         $providers = Get-Providers -Type $cat.Type
         $providers += Get-Providers -Type $cat.Type -BasePath $ConfigPath
 
+        Write-Debug "Providers: $($providers | Out-String)"
         foreach ($provider in $providers) {
             $name = $provider.Name
             $path = $provider.Path
@@ -533,13 +528,9 @@ switch ($Command) {
             return
         }
         
-        Import-Module (Join-Path $PSScriptRoot "state.psm1") -Force
-        Import-Module (Join-Path $PSScriptRoot "utils.psm1") -Force
-        Import-Module (Join-Path $PSScriptRoot "logging.psm1") -Force
-
         Write-Log INFO "Capturing system state..."
 
-        $systemState = Get-SystemState -Providers $Providers -NoCache:$NoCache
+        $systemState = Get-SystemState -Providers $Providers -NoCache:$NoCache 
         if (-not $systemState -or $systemState.Count -eq 0) {
             Write-Log WARN "No system state captured"
             return
@@ -586,8 +577,6 @@ switch ($Command) {
             return
         }
         
-        Import-Module (Join-Path $Script:WinspecRoot "utils.psm1") -Force
-        Import-Module (Join-Path $Script:WinspecRoot "logging.psm1") -Force
         $specContent = Get-Spec -Path $Spec
         if (Test-SpecSchema -Spec $specContent) {
             Write-Log -Level OK -Message "Specification is valid"
@@ -610,7 +599,10 @@ switch ($Command) {
             -Triggers $Triggers `
             -ConfigPath $ConfigPath
 
-        Write-Report -Results $results
+        $results.GetEnumerator() |
+        Select-Object Name, Value |
+        Format-Table -AutoSize | Out-String |
+        Write-Host
     }
     
     
@@ -620,11 +612,10 @@ switch ($Command) {
             return
         }
         
-        Import-Module (Join-Path $Script:WinspecRoot "pull.psm1") -Force
-        Import-Module (Join-Path $Script:WinspecRoot "utils.psm1") -Force
         if (Test-Path ($Spec)) {
             $specContent = Get-Spec $Spec
-        } else {
+        }
+        else {
             $specContent = @{}
         }
         $pullParams = @{
@@ -643,6 +634,7 @@ switch ($Command) {
         if ($Name) { $pullParams['Name'] = $Name }
         if ($Description) { $pullParams['Description'] = $Description }
         
+        Import-Module (Join-Path $Script:WinspecRoot "pull.psm1") -ErrorAction Stop -Force
         Invoke-Pull @pullParams
     }
     
@@ -652,15 +644,21 @@ switch ($Command) {
             return
         }
         
-        Import-Module (Join-Path $Script:WinspecRoot "push.psm1") -Force
+        $specContent = Get-Spec $Spec
+        if ($null -eq $specContent) {
+            Write-Log -Level "ERROR" "The spec is empty"
+            exit 1
+        }
         $pushParams = @{
-            Spec = $Spec
+            Spec = $specContent
+            ConfigPath = $ConfigPath
         }
         if ($Providers) { $pushParams['Providers'] = $Providers }
         if ($Triggers) { $pushParams['Triggers'] = $Triggers }
         if ($DryRun) { $pushParams['DryRun'] = $true }
         if ($Checkpoint) { $pushParams['Checkpoint'] = $true }
         
+        Import-Module (Join-Path $Script:WinspecRoot "push.psm1") -Force
         $result = Invoke-Push @pushParams
         if (-not $result.Success) { exit 1 }
     }
@@ -671,9 +669,6 @@ switch ($Command) {
             return
         }
         
-        Import-Module (Join-Path $Script:WinspecRoot "diff.psm1") -Force
-        Import-Module (Join-Path $Script:WinspecRoot "utils.psm1") -Force
-        Import-Module (Join-Path $Script:WinspecRoot "state.psm1") -Force
         $specContent = Get-Spec -Path $Spec
         if ($Against) {
             $againstContent = Get-Spec -Path $Against
@@ -687,6 +682,7 @@ switch ($Command) {
         if ($Against) { $diffParams['Against'] = $againstContent }
         if ($Providers) { $diffParams['Providers'] = $Providers }
         
+        Import-Module (Join-Path $Script:WinspecRoot "diff.psm1") -Force
         Invoke-Diff @diffParams
     }
     
@@ -706,7 +702,6 @@ switch ($Command) {
             exit 1
         }
         
-        Import-Module (Join-Path $Script:WinspecRoot "merge.psm1") -Force
         $mergeParams = @{
             BasePath     = $Base
             IncomingPath = $Incoming
@@ -715,6 +710,7 @@ switch ($Command) {
         }
         if ($Output) { $mergeParams['OutputPath'] = $Output }
         
+        Import-Module (Join-Path $Script:WinspecRoot "merge.psm1") -Force
         $result = Merge-Configuration @mergeParams
         if ($result) {
             Write-Host (Format-MergeReport -MergeResult $result)

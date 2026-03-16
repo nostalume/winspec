@@ -3,9 +3,9 @@
 # Replaces: wrapper in winspec.ps1
 
 # Import dependent modules
+Import-Module (Join-Path $PSScriptRoot "registry-maps.psm1") -Force
 Import-Module (Join-Path $PSScriptRoot "logging.psm1") -Force
 Import-Module (Join-Path $PSScriptRoot "utils.psm1") -Force
-Import-Module (Join-Path $PSScriptRoot "registry-maps.psm1") -Force
 
 # =============================================================================
 # PUSH COMMAND - Apply config to system
@@ -45,6 +45,9 @@ function Invoke-Push {
         
         [Parameter(Mandatory = $false)]
         [switch]$DryRun,
+
+        [Parameter(Mandatory = $false)]
+        [string]$ConfigPath,
         
         [Parameter(Mandatory = $false)]
         [switch]$Checkpoint
@@ -71,7 +74,7 @@ function Invoke-Push {
         Enter-Sandbox -Mode $sandboxModeValue
     }
     
-    $result = Invoke-WinSpec -Spec $Spec -Providers $Providers -Triggers $Triggers -Checkpoint:$Checkpoint 
+    $result = Invoke-WinSpec -Spec $Spec -ConfigPath $ConfigPath -Providers $Providers -Triggers $Triggers -Checkpoint:$Checkpoint 
     
     # Handle results
     if (-not $result.Success) {
@@ -92,6 +95,7 @@ function Invoke-Push {
         Exit-Sandbox -DiscardChanges:($sandboxModeValue -eq "DryRun")
     }
     
+    Write-Host ""
     Write-Log -Level "OK" -Message "Push completed successfully"
     return $result
 }

@@ -41,36 +41,34 @@ function Clear-SystemStateCache {
 
 function Get-Providers {
     <#
-.SYNOPSIS
-    Discover provider modules.
+    .SYNOPSIS
+        Discover provider modules.
 
-.DESCRIPTION
-    Scans provider directories and returns structured provider metadata.
-    If BasePath is not specified, the module root will be used.
+    .DESCRIPTION
+        Scans provider directories and returns structured provider metadata.
+        If BasePath is not specified, the module root will be used.
 
-.PARAMETER BasePath
-    Optional root directory to scan. Defaults to $ModuleRoot.
+    .PARAMETER BasePath
+        Optional root directory to scan. Defaults to $ModuleRoot.
 
-.PARAMETER Type
-    Provider type to filter by. If omitted, all provider types are scanned.
+    .PARAMETER Type
+        Provider type to filter by. If omitted, all provider types are scanned.
 
-.OUTPUTS
-    PSCustomObject with properties:
-        Type
-        Name
-        Path
+    .OUTPUTS
+        PSCustomObject with properties:
+            Type
+            Name
+            Path
 #>
-
     [CmdletBinding()]
     param(
         [string]$BasePath = $ModuleRoot,
-
+        
         [ValidateSet("Declarative", "Trigger")]
         [string]$Type
     )
 
     $results = @()
-
     if (-not (Test-Path $BasePath)) {
         Write-Verbose "Provider base path not found: $BasePath"
         return $results
@@ -96,10 +94,8 @@ function Get-Providers {
         }
 
         $files = Get-ChildItem -Path $providerDir -Filter "*.psm1" -ErrorAction SilentlyContinue
-
         foreach ($file in $files) {
             try {
-
                 $module = Import-Module $file.FullName -PassThru -ErrorAction Stop
                 $info = & $module Get-ProviderInfo
 
@@ -164,7 +160,7 @@ function Resolve-Triggers {
     }
 
     # determine execution set
-    if ($null -eq $UserTriggers) {
+    if (-not $UserTriggers) {
         return $resolved
     }
     elseif ($UserTriggers -eq "*") {
@@ -176,12 +172,13 @@ function Resolve-Triggers {
     elseif ($UserTriggers -is [array]) {
         $names = $UserTriggers
     }
-    elseif ($UserTriggers -is [hashtable]) {
-        $names = $UserTriggers.Keys
-    }
 
+    $providerMap = @{}
+    foreach ($p in $providers) {
+        $providerMap[$p.Name] = $p
+    }
     foreach ($name in $names) {
-        $provider = $providers | Where-Object Name -eq $name
+        $provider = $providerMap["$name"]
         if (-not $provider) {
             Write-Log -Level ERROR -Message "Trigger not found: $name"
             continue
@@ -219,42 +216,49 @@ function Resolve-ProviderList {
 }
 
 function Resolve-ProviderCommand {
+    [CmdletBinding()]
     param(
         [pscustomobject]$Provider,
-        [ValidateSet("Export", "Merge")]
+        [ValidateSet("Export","Merge")]
         [string]$Operation
     )
 
     $cmdName = "$Operation-$($Provider.Name)State"
+    Write-Verbose "Resolving provider command: $cmdName"
 
     if (-not (Get-Module -Name $Provider.Name)) {
         Import-Module $Provider.Path -ErrorAction Stop
     }
 
-    return Get-Command $cmdName -ErrorAction SilentlyContinue
-}
-
-function Export-ProviderState {
-    param([pscustomobject]$Provider)
-
-    try {
-        $cmd = Resolve-ProviderCommand -Provider $Provider -Operation Export
-        if ($cmd) {
-            return & $cmd
-        }
-
-        Write-Log -Level WARN -Message "Provider $($Provider.Name) missing export function"
-    }
-    catch {
-        Write-Log -Level WARN -Message "Failed exporting provider $($Provider.Name)"
-    }
-
-    return $null
+    return Get-Command -Name $cmdName -Module $Provider.Name -ErrorAction SilentlyContinue
 }
 
 # =============================================================================
 # STATE CAPTURE
 # =============================================================================
+
+function Export-ProviderState {
+    [CmdletBinding()]
+    param(
+        [pscustomobject]$Provider
+    )
+
+    try {
+        $cmd = Resolve-ProviderCommand -Provider $Provider -Operation Export
+        if (-not $cmd) {
+            Write-Log -Level WARN -Message "Provider $($Provider.Name) missing export function"
+            return $null
+        }
+
+        Write-Verbose "Executing provider export: $($cmd.Name)"
+        return & $cmd
+    }
+    catch {
+        Write-Debug $_
+        Write-Log -Level WARN -Message "Failed exporting provider $($Provider.Name)"
+        return $null
+    }
+}
 
 function Get-SystemState {
     [CmdletBinding()]
@@ -274,6 +278,7 @@ function Get-SystemState {
         $result = @{}
         foreach ($p in Resolve-ProviderList -Providers $Providers) {
             if ($script:ProviderStateCache.ContainsKey($p)) {
+                Write-Debug "Provider Cached State: $($script:ProviderStateCache[$p])"
                 $result[$p] = $script:ProviderStateCache[$p]
             }
         }
@@ -281,6 +286,7 @@ function Get-SystemState {
     }
 
     $allProviders = Get-Managers -ConfigPath $ConfigPath
+    Write-Debug "Available providers:`n$($allProviders | Out-String)"
 
     $Providers = Resolve-ProviderList $Providers
 
@@ -295,7 +301,8 @@ function Get-SystemState {
 
     foreach ($provider in $providersToCapture) {
         $providerState = Export-ProviderState -Provider $provider
-        if ($null -ne $providerState) {
+        Write-Debug "Provider [$($provider.Name)] state:`n$($providerState | Out-String)"
+        if ($providerState) {
             $state[$provider.Name] = $providerState
         }
     }
@@ -304,69 +311,6 @@ function Get-SystemState {
     $script:StateCacheTimestamp = Get-Date
 
     return $state
-}
-
-# =============================================================================
-# STATE MERGE - Preserves user settings during pull
-# =============================================================================
-function Merge-ProviderState {
-    param(
-        [pscustomobject]$Provider,
-        $System,
-        $Existing
-    )
-
-    try {
-        $cmd = Resolve-ProviderCommand -Provider $Provider -Operation Merge
-
-        if ($cmd) {
-            return & $cmd -SystemState $System -SpecState $Existing
-        }
-
-        return $System
-    }
-    catch {
-        Write-Log -Level WARN -Message "Merge failed for provider $($Provider.Name)"
-        return $System
-    }
-}
-
-function Merge-SystemState {
-    param(
-        [hashtable]$SystemState,
-        [hashtable]$SpecState,
-        [pscustomobject[]]$Providers
-    )
-
-    if (!$SystemState) { return $SpecState }
-    if (!$SpecState) { return $SystemState }
-
-    $merged = @{}
-
-    $keys = [System.Collections.Generic.HashSet[string]]::new(
-        $SystemState.Keys + $SpecState.Keys
-    )
-
-    foreach ($k in $keys) {
-        if (!$SystemState.ContainsKey($k)) {
-            $merged[$k] = $SpecState[$k]
-            continue
-        }
-
-        if (!$SpecState.ContainsKey($k)) {
-            $merged[$k] = $SystemState[$k]
-            continue
-        }
-
-        $provider = $Providers | Where-Object Name -eq $k
-
-        $merged[$k] = Merge-ProviderState `
-            -Provider $provider `
-            -System $SystemState[$k] `
-            -Existing $SpecState[$k]
-    }
-
-    return $merged
 }
 
 # =============================================================================
@@ -499,7 +443,7 @@ function Invoke-Manager {
     }
 
     if ($inDesiredState) {
-        Write-Log -Level "OK" -Message "$providerName already in desired state"
+        Write-Log -Level "OK"  -Message "$providerName already in desired state"
         return @{ Status = "AlreadyInDesiredState" }
     }
 
@@ -528,12 +472,10 @@ function Invoke-Manager {
 }
 
 function Invoke-Managers {
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess)]
     param (
         [Parameter(Mandatory)]
         [hashtable]$Config,
-
-        [string]$ConfigPath,
 
         [string[]]$Providers = @()
     )
@@ -548,7 +490,6 @@ function Invoke-Managers {
     }
 
     foreach ($provider in $providerObjects) {
-
         $name = $provider.Name
 
         if ($null -eq $Config.$name) {
@@ -560,10 +501,8 @@ function Invoke-Managers {
             continue
         }
 
-        $results[$name] = Invoke-ManagerProvider `
+        $results[$name] = Invoke-Manager `
             -Provider $provider `
-            -Config $Config `
-            -ConfigPath $ConfigPath
     }
 
     return $results
@@ -574,7 +513,6 @@ function Invoke-Managers {
 # =============================================================================
 
 function Invoke-Trigger {
-
     [CmdletBinding(SupportsShouldProcess)]
     param(
         [Parameter(Mandatory)]
@@ -586,27 +524,29 @@ function Invoke-Trigger {
     $name = $Provider.Name
     $path = $Provider.Path
 
+    Write-LogSection -Name "$name"
+
     try {
         Import-Module $path -ErrorAction Stop
     }
     catch {
         Write-Log -Level "ERROR" -Message "Failed to load trigger: $name"
-        return @{ Status="Error"; Message="Failed to load trigger" }
+        return @{ Status = "Error"; Message = "Failed to load trigger" }
     }
 
-    $cmd = Get-Command "Invoke-$($name)Trigger" -ErrorAction SilentlyContinue
+    $cmd = Get-Command "Invoke-Trigger" -ErrorAction SilentlyContinue
     if (-not $cmd) {
         Write-Log -Level "ERROR" -Message "Trigger $name missing invoke function"
-        return @{ Status="Error"; Message="Missing trigger function" }
+        return @{ Status = "Error"; Message = "Missing trigger function" }
     }
 
-    if ($PSCmdlet.ShouldProcess($name,"Execute trigger")) {
+    if ($PSCmdlet.ShouldProcess($name, "Execute trigger")) {
         try {
             return & $cmd -Option $Value
         }
         catch {
             Write-Log -Level "ERROR" -Message "Trigger $name failed: $_"
-            return @{ Status="Error"; Message=$_.Exception.Message }
+            return @{ Status = "Error"; Message = $_.Exception.Message }
         }
     }
 }
@@ -657,6 +597,9 @@ function Invoke-WinSpec {
         [Parameter(Mandatory = $false)]
         $Triggers,
 
+        [Parameter(Mandatory = $false)]
+        [string]$ConfigPath,
+
         [switch]$Checkpoint
     )
 
@@ -674,30 +617,26 @@ function Invoke-WinSpec {
         }
     }
 
-    $context = @{
-        Config     = $resolved
-        ConfigPath = $configLocation
-    }
-
     Write-LogSection -Name "Providers"
-    $results = Invoke-Managers @context -Providers $Providers -WhatIf:$DryRun
+    $results = Invoke-Managers -Config $Spec -Providers $Providers -WhatIf:$DryRun
     Write-LogSection -Name "Triggers"
-    $results.Triggers = Invoke-Triggers @context -Trigger $Triggers -WhatIf:$DryRun
+    $results["Triggers"] = Invoke-Triggers -Config $Spec -ConfigPath $ConfigPath -Trigger $Triggers -WhatIf:$DryRun
 
     foreach ($provider in $results.Keys) {
         $result = $results[$provider]
         $status = if ($result.Status) { $result.Status } else { "Completed" }
         $level = switch ($status) {
             "AlreadyInDesiredState" { "OK" }
-            "DryRun"                { "INFO" }
-            "Error"                 { "ERROR" }
-            default                 { "APPLIED" }
+            "DryRun" { "INFO" }
+            "Error" { "ERROR" }
+            default { "APPLIED" }
         }
 
-        Write-Log -Level $level -Message "$provider : $status"
+        Write-LogHeader "Push Results"
+        Write-Log -Level $level -Message "[$provider]: $status"
     }
 
-    $results.Success = $true
+    $results["Success"] = $true
 
     return $results
 }

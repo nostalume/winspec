@@ -1,5 +1,4 @@
 # logging.psm1 - Unified logging module for WinSpec
-# Fixes the $Msg/$Message bug from the original nix-win/providers/logger.psm1
 
 function Write-Log {
     [CmdletBinding()]

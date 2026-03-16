@@ -2,7 +2,7 @@
 # Consolidates common functionality across diff, merge, and sync modules
 
 # Import dependent modules
-Import-Module (Join-Path $PSScriptRoot "logging.psm1") -Force
+Import-Module (Join-Path $PSScriptRoot "logging.psm1") -ErrorAction Stop
 
 # =============================================================================
 # HASHTABLE EXPORT - Unified hashtable-to-string conversion
@@ -16,7 +16,7 @@ function ConvertTo-HashtableString {
         [int]$IndentLevel = 0
     )
 
-    $indent      = "    " * $IndentLevel
+    $indent = "    " * $IndentLevel
     $innerIndent = "    " * ($IndentLevel + 1)
 
     $lines = @()
@@ -80,7 +80,7 @@ function ConvertTo-PowerShellValue {
             return '@()'
         }
 
-        $indent      = "    " * $IndentLevel
+        $indent = "    " * $IndentLevel
         $innerIndent = "    " * ($IndentLevel + 1)
 
         $items = $Value | ForEach-Object {
@@ -179,87 +179,6 @@ function Import-Configuration {
         Write-Log -Level "ERROR" -Message "Failed to parse config: $($_.Exception.Message)"
         return $null
     }
-}
-
-
-# =============================================================================
-# VALUE EQUALITY TESTING
-# =============================================================================
-
-function Test-ValuesEqual {
-    <#
-    .SYNOPSIS
-        Tests if two values are equal, handling complex types.
-    .DESCRIPTION
-        Recursively compares hashtables, arrays, and primitive values.
-    .PARAMETER Value1
-        First value to compare.
-    .PARAMETER Value2
-        Second value to compare.
-    .PARAMETER MaxDepth
-        Maximum recursion depth to prevent stack overflow on circular refs.
-        Default is 10.
-    .PARAMETER CurrentDepth
-        Internal parameter tracking current recursion depth.
-    .OUTPUTS
-        Boolean indicating equality.
-    #>
-    param(
-        $Value1,
-        $Value2,
-        [int]$MaxDepth = 10,
-        [int]$CurrentDepth = 0
-    )
-    
-    # Check recursion depth
-    if ($CurrentDepth -gt $MaxDepth) {
-        Write-Verbose "Test-ValuesEqual: Max depth ($MaxDepth) exceeded"
-        return $false
-    }
-    
-    if (-not $Value1 -and -not $Value2) {
-        return $true
-    }
-    
-    if (-not $Value1 -or -not $Value2) {
-        return $false
-    }
-    
-    $type1 = $Value1.GetType()
-    $type2 = $Value2.GetType()
-    
-    if ($type1 -ne $type2) {
-        return $false
-    }
-    
-    if ($Value1 -is [hashtable]) {
-        if ($Value1.Count -ne $Value2.Count) {
-            return $false
-        }
-        foreach ($key in $Value1.Keys) {
-            if (-not $Value2.ContainsKey($key)) {
-                return $false
-            }
-            if (-not (Test-ValuesEqual -Value1 $Value1[$key] -Value2 $Value2[$key] -MaxDepth $MaxDepth -CurrentDepth ($CurrentDepth + 1))) {
-                return $false
-            }
-        }
-        return $true
-    }
-    
-    if ($Value1 -is [array]) {
-        if ($Value1.Count -ne $Value2.Count) {
-            return $false
-        }
-        for ($i = 0; $i -lt $Value1.Count; $i++) {
-            if (-not (Test-ValuesEqual -Value1 $Value1[$i] -Value2 $Value2[$i] -MaxDepth $MaxDepth -CurrentDepth ($CurrentDepth + 1))) {
-                return $false
-            }
-        }
-        return $true
-    }
-    
-    return $Value1 -eq $Value2
 }
 
 function Merge-Hashtables {
@@ -415,8 +334,8 @@ function Get-Spec {
     Write-Log "INFO" "Loading configuration: $specPath"
 
     $config = Import-Configuration $specPath
-    if (-not $config) {
-        Write-Log "ERROR" "Failed to load specification"
+    if ($null -eq $config -or $config.Count -eq 0) {
+        Write-Log "ERROR" "Configuration is empty"
         return $null
     }
 
@@ -588,17 +507,34 @@ function Invoke-AdminCommand {
     }
 
     $scriptFile = [System.IO.Path]::GetTempFileName() + ".ps1"
+    $outputFile = [System.IO.Path]::GetTempFileName()
 
     try {
-        $Script.ToString() | Set-Content $scriptFile -Encoding UTF8
+        $scriptContent = @"
+`$result = & {
+$($Script.ToString())
+}
 
+`$result | ConvertTo-Json -Depth 5 | Set-Content "$outputFile" -Encoding UTF8
+"@
+
+        Set-Content -Path $scriptFile -Value $scriptContent -Encoding UTF8
         Start-Process powershell `
             -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$scriptFile`"" `
             -Verb RunAs `
+            -WindowStyle Hidden `
             -Wait
+
+        if (Test-Path $outputFile) {
+            $json = Get-Content $outputFile -Raw
+            if ($json) {
+                return $json | ConvertFrom-Json
+            }
+        }
     }
     finally {
         Remove-Item $scriptFile -ErrorAction SilentlyContinue
+        Remove-Item $outputFile -ErrorAction SilentlyContinue
     }
 }
 

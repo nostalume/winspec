@@ -1,12 +1,10 @@
 # providers/registry.psm1 - Declarative registry provider
 
 # Import dependent modules
-Import-Module (Join-Path $PSScriptRoot "..\logging.psm1") -Force
-Import-Module (Join-Path $PSScriptRoot "..\schema.psm1") -Force
-Import-Module (Join-Path $PSScriptRoot "..\registry-maps.psm1") -Force
-
-# Import sandbox module once at module load time (consistent with service.psm1)
-Import-Module (Join-Path $PSScriptRoot "..\sandbox.psm1") -Force -ErrorAction SilentlyContinue
+Import-Module (Join-Path $PSScriptRoot "..\logging.psm1")
+Import-Module (Join-Path $PSScriptRoot "..\schema.psm1")
+Import-Module (Join-Path $PSScriptRoot "..\registry-maps.psm1")
+Import-Module (Join-Path $PSScriptRoot "..\sandbox.psm1") -ErrorAction SilentlyContinue
 
 function Get-ProviderInfo {
     return @{
@@ -15,24 +13,24 @@ function Get-ProviderInfo {
     }
 }
 
+function Get-ProviderInfo {
+    return @{ Name = "Registry"; Type = "Declarative" }
+}
+
 function Get-RegistryValue {
     [CmdletBinding()]
     param (
-        [Parameter(Mandatory = $true)]
-        [string]$Path,
-        
-        [Parameter(Mandatory = $true)]
-        [string]$Property,
-        
-        [Parameter(Mandatory = $false)]
-        $Default = $null
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Property,
+        [Parameter()]$Default = $null
     )
-    
+
     try {
         $result = Get-ItemProperty -Path $Path -Name $Property -ErrorAction SilentlyContinue
-        if ($result) {
+        if ($null -ne $result) {
             return $result.$Property
         }
+
         return $Default
     }
     catch {
@@ -43,52 +41,30 @@ function Get-RegistryValue {
 function Set-RegistryValue {
     [CmdletBinding()]
     param (
-        [Parameter(Mandatory = $true)]
-        [string]$Path,
-        
-        [Parameter(Mandatory = $true)]
-        [string]$Property,
-        
-        [Parameter(Mandatory = $true)]
-        [string]$Type,
-        
-        [Parameter(Mandatory = $true)]
-        $Value
+        [Parameter(Mandatory)] [string]$Path,
+        [Parameter(Mandatory)] [string]$Property,
+        [Parameter(Mandatory)] [string]$Type,
+        [Parameter(Mandatory)] $Value
     )
-    
-    # Create path if it doesn't exist
-    if (-not (Test-Path $Path)) {
-        New-Item -Path $Path -Force | Out-Null
-    }
-    
+
+    if (-not (Test-Path $Path)) { New-Item -Path $Path -Force | Out-Null }
     Set-ItemProperty -Path $Path -Name $Property -Type $Type -Value $Value -Force
 }
 
 function Get-RegistryStateFromMap {
-    [CmdletBinding()]
     param (
-        [Parameter(Mandatory = $true)]
-        [hashtable]$StateMap,
-        
-        [Parameter(Mandatory = $true)]
-        $RegistryValue
+        [Parameter(Mandatory)] [hashtable]$StateMap,
+        [Parameter(Mandatory)] $RegistryValue
     )
-    
-    $reverseMap = @{}
-    foreach ($key in $StateMap.Keys) {
-        $reverseMap[$StateMap[$key]] = $key
-    }
-    
-    return $reverseMap[$RegistryValue]
+
+    return $StateMap[$RegistryValue]
 }
 
-# Helper function to build reverse map (used by Export-RegistryState to avoid duplication)
 function New-ReverseStateMap {
-    param(
-        [Parameter(Mandatory = $true)]
-        [hashtable]$StateMap
+    param (
+        [Parameter(Mandatory)] [hashtable]$StateMap
     )
-    
+
     $reverseMap = @{}
     foreach ($key in $StateMap.Keys) {
         $reverseMap[$StateMap[$key].ToString()] = $key
@@ -98,80 +74,72 @@ function New-ReverseStateMap {
 
 function Test-RegistryState {
     [CmdletBinding()]
-    param (
-        [Parameter(Mandatory = $true)]
-        [hashtable]$Desired
-    )
-    
+    param ([Parameter(Mandatory)] [hashtable]$Desired)
+
     $registryMap = Get-RegistryMaps
     $allInDesiredState = $true
-    
+
     foreach ($category in $Desired.Keys) {
-        $catConfig = $registryMap[$category]
-        if (-not $catConfig) {
+        if (-not $registryMap.ContainsKey($category)) {
             Write-Log -Level "WARN" -Message "Unknown registry category: $category"
             continue
         }
-        
+
+        $catConfig = $registryMap[$category]
         foreach ($propName in $Desired[$category].Keys) {
-            $propConfig = $catConfig.Properties[$propName]
-            if (-not $propConfig) {
+            if (-not $catConfig.Properties.ContainsKey($propName)) {
                 Write-Log -Level "WARN" -Message "Unknown property: $propName in $category"
                 continue
             }
-            
+
+            $propConfig = $catConfig.Properties[$propName]
             $currentValue = Get-RegistryValue -Path $catConfig.Path -Property $propConfig.Name -Default $propConfig.Default
-            
             if ($propConfig.Map) {
                 $currentState = Get-RegistryStateFromMap -StateMap $propConfig.Map -RegistryValue $currentValue
             }
             else {
                 $currentState = $currentValue
             }
-            
-            $desiredValue = $Desired[$category][$propName]
-            
-            if ($currentState -ne $desiredValue) {
+            if ($currentState -ne $Desired[$category][$propName]) {
                 $allInDesiredState = $false
             }
         }
     }
-    
+
     return $allInDesiredState
 }
 
 function Set-RegistryState {
     [CmdletBinding(SupportsShouldProcess = $true)]
-    param (
-        [Parameter(Mandatory = $true)]
-        [hashtable]$Desired
-    )
-    
-    $results = @{}
+    param ([Parameter(Mandatory)] [hashtable]$Desired)
+
     $registryMap = Get-RegistryMaps
-    
+    $results = @{}
+
     foreach ($category in $Desired.Keys) {
+        $categoryResults = @{}
         $catConfig = $registryMap[$category]
+
         if (-not $catConfig) {
             Write-Log -Level "WARN" -Message "Unknown registry category: $category"
             $results[$category] = @{ Status = "Error"; Message = "Unknown category" }
             continue
         }
-        
+
         Write-Log -Level "INFO" -Message "Processing category: $category"
-        $categoryResults = @{}
-        
+
         foreach ($propName in $Desired[$category].Keys) {
             $propConfig = $catConfig.Properties[$propName]
+
             if (-not $propConfig) {
                 Write-Log -Level "WARN" -Message "Unknown property: $propName in $category"
                 $categoryResults[$propName] = @{ Status = "Error"; Message = "Unknown property" }
                 continue
             }
-            
+
             $desiredValue = $Desired[$category][$propName]
             $currentRaw = Get-RegistryValue -Path $catConfig.Path -Property $propConfig.Name -Default $propConfig.Default
-            
+
             if ($propConfig.Map) {
                 $currentState = Get-RegistryStateFromMap -StateMap $propConfig.Map -RegistryValue $currentRaw
                 $valueToSet = $propConfig.Map[$desiredValue]
@@ -180,15 +148,15 @@ function Set-RegistryState {
                 $currentState = $currentRaw
                 $valueToSet = $desiredValue
             }
-            
+
             if ($currentState -eq $desiredValue) {
                 Write-LogOk -Name "$category.$propName" -DesiredValue $desiredValue
                 $categoryResults[$propName] = @{ Status = "AlreadySet"; Value = $desiredValue }
                 continue
             }
-            
+
             Write-LogChange -Name "$category.$propName" -CurrentValue $currentState -DesiredValue $desiredValue
-            
+
             if ($PSCmdlet.ShouldProcess("$($catConfig.Path)\$($propConfig.Name)", "Set to '$desiredValue'")) {
                 try {
                     Set-RegistryValue -Path $catConfig.Path -Property $propConfig.Name -Type $propConfig.Type -Value $valueToSet
@@ -201,58 +169,49 @@ function Set-RegistryState {
                 }
             }
         }
-        
+
         $results[$category] = $categoryResults
     }
-    
+
     return $results
 }
 
 function Export-RegistryState {
-    <#
-    .SYNOPSIS
-        Exports the current registry state for bidirectional sync.
-    .DESCRIPTION
-        Captures current registry settings based on the registry maps.
-        Only exports values that are defined in the registry maps.
-    .OUTPUTS
-        Hashtable with registry categories and their values
-    #>
     [CmdletBinding()]
     param()
-    
+
     $registryMaps = Get-RegistryMaps
     $result = @{}
-    
+
     foreach ($categoryName in $registryMaps.Keys) {
         $category = $registryMaps[$categoryName]
         $categoryResult = @{}
         $hasValues = $false
-        
+
         foreach ($propName in $category.Properties.Keys) {
             $propDef = $category.Properties[$propName]
             $value = Get-RegistryValue -Path $category.Path -Property $propDef.Name
-            
+
             if ($null -ne $value) {
-                # Apply reverse map if exists (convert registry value to friendly value)
-                # Use helper function to avoid duplicate reverse map logic
                 if ($propDef.Map) {
                     $reverseMap = New-ReverseStateMap -StateMap $propDef.Map
                     if ($reverseMap.ContainsKey($value.ToString())) {
                         $value = $reverseMap[$value.ToString()]
                     }
                 }
-                
+
                 $categoryResult[$propName] = $value
                 $hasValues = $true
+
+                Write-Debug "Registry Value Extraction: $propName = $value"
             }
         }
-        
+
         if ($hasValues) {
             $result[$categoryName] = $categoryResult
         }
     }
-    
+
     return $result
 }
 
@@ -262,57 +221,49 @@ function Compare-RegistryState {
         Compares system registry state with desired configuration.
     .DESCRIPTION
         Compares current registry values with desired configuration and
-        returns differences (changed values).
+        returns differences (added or changed values).
     .PARAMETER System
         Current system state (from Export-RegistryState)
     .PARAMETER Desired
         Desired configuration state
     .OUTPUTS
-        Array of difference objects with Type, Path, SystemValue, ConfigValue
+        Array of PSCustomObject with Type, Path, SystemValue, ConfigValue
     #>
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory = $true)]
-        [hashtable]$System,
-        
-        [Parameter(Mandatory = $true)]
-        [hashtable]$Desired
+        [Parameter(Mandatory)] [hashtable]$System,
+        [Parameter(Mandatory)] [hashtable]$Desired
     )
-    
-    $differences = @()
-    
+
+    $differences = [System.Collections.Generic.List[PSObject]]::new()
+
     foreach ($categoryName in $Desired.Keys) {
         $desiredCategory = $Desired[$categoryName]
-        $systemCategory = if ($System.ContainsKey($categoryName)) { $System[$categoryName] } else { @{} }
-        
+        if ($System[$categoryName]) {
+            $systemCategory = $System[$categoryName]
+        }
+        else {
+            $systemCategory = @{}
+        }
+
         foreach ($propName in $desiredCategory.Keys) {
             $desiredValue = $desiredCategory[$propName]
-            $systemValue = if ($systemCategory.ContainsKey($propName)) { $systemCategory[$propName] } else { $null }
-            
+            $systemValue = $systemCategory[$propName]
+
+            if ($systemValue -eq $desiredValue) { continue }
+
+            $type = if ($null -eq $systemValue) { "Added" } else { "Changed" }
             $path = "Registry.$categoryName.$propName"
-            
-            if ($null -eq $systemValue) {
-                # Property not in system
-                $differences += @{
-                    Type = "Added"
-                    Path = $path
-                    SystemValue = $null
-                    ConfigValue = $desiredValue
-                }
-            }
-            elseif ($systemValue -ne $desiredValue) {
-                # Value changed
-                $differences += @{
-                    Type = "Changed"
-                    Path = $path
+
+            $differences.Add([PSCustomObject]@{
+                    Type        = $type
+                    Path        = $path
                     SystemValue = $systemValue
                     ConfigValue = $desiredValue
-                }
-            }
-            # Skip "Equal" entries - only Added, Changed, Removed for cleaner diffs
+                })
         }
     }
-    
+
     return $differences
 }
 
@@ -386,7 +337,7 @@ function Invoke-RegistrySandboxApply {
     $currentState = Get-SandboxState -Provider "Registry"
     
     $results = @{
-        Status = "Success"
+        Status  = "Success"
         Changed = @()
     }
     
@@ -402,7 +353,7 @@ function Invoke-RegistrySandboxApply {
             if ($oldValue -ne $newValue) {
                 $results.Changed += @{
                     Category = $category
-                    Key = $key
+                    Key      = $key
                     OldValue = $oldValue
                     NewValue = $newValue
                 }

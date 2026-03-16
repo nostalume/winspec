@@ -169,25 +169,12 @@ Capture your current system setup (or start fresh):
  | **diff** | Compare system state with a spec |
  | **merge** | Merge two specification files |
  | **status** | Show current system state |
- | `apply` | Apply a specification file (legacy alias for push) |
- | `init` | Initialize a new configuration (legacy alias for pull) |
  | `trigger` | Execute a specific trigger |
- | `export` | Export current system state (legacy alias for pull) |
- | `sync` | Interactive sync (legacy - use pull + push instead) |
  | `rollback` | Rollback to a checkpoint |
  | `providers` | List available providers |
  | `validate` | Validate a spec without applying |
  | `sandbox` | Test changes in a sandbox environment |
  | `help` | Show help message |
-
-### CLI Options
-
-| Option | Description |
-|--------|-------------|
-| `-Spec` | Path to specification file |
-| `-DryRun` | Preview changes without applying |
-| `-Checkpoint` | Create restore point before applying |
-| `-WithTriggers` | Include trigger execution |
 
 ### Specification Format
 
@@ -220,11 +207,6 @@ Capture your current system setup (or start fresh):
         Desktop = @{
             MenuShowDelay = "0"
         }
-    }
-    
-    # Package: ensure these are installed
-    Package = @{
-        Installed = @("git", "neovim", "nodejs", "python")
     }
     
     # Windows Services
@@ -326,7 +308,7 @@ winspec pull -Providers Registry,Package -Output my-config.ps1
 
 # Run specific trigger(s)
 .\winspec\winspec.ps1 trigger "activation"
-.\winspec\winspec.ps1 trigger @{ debloat = "silent" }
+.\winspec\winspec.ps1 trigger "activation", "debloat"
 
 # Merge two config files
 .\winspec\winspec.ps1 merge -Base base.ps1 -Incoming custom.ps1 -Output merged.ps1

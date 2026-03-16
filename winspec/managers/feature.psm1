@@ -1,37 +1,13 @@
 # providers/feature.psm1 - Declarative Windows features provider
 
-Import-Module (Join-Path $PSScriptRoot "..\logging.psm1") -Force
-Import-Module (Join-Path $PSScriptRoot "..\utils.psm1") -Force
-Import-Module (Join-Path $PSScriptRoot "..\sandbox.psm1") -Force -ErrorAction SilentlyContinue
+Import-Module (Join-Path $PSScriptRoot "..\logging.psm1")
+Import-Module (Join-Path $PSScriptRoot "..\utils.psm1") 
+Import-Module (Join-Path $PSScriptRoot "..\sandbox.psm1") -ErrorAction SilentlyContinue
 
 function Get-ProviderInfo {
     return @{
         Name = "Feature"
         Type = "Declarative"
-    }
-}
-
-function Get-FeatureState {
-
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)]
-        [string]$FeatureName
-    )
-
-    try {
-        $state = Invoke-AdminCommand {
-            (Get-WindowsOptionalFeature -Online -FeatureName '$FeatureName' -ErrorAction SilentlyContinue).State
-        }
-
-        if ($state) {
-            return $state.Trim()
-        }
-
-        return $null
-    }
-    catch {
-        return $null
     }
 }
 
@@ -57,10 +33,11 @@ function Test-FeatureState {
     )
     
     $allInDesiredState = $true
+    $features = Export-FeatureState
     
     foreach ($featureName in $Desired.Keys) {
         $desiredState = $Desired[$featureName]
-        $currentState = Get-FeatureState -FeatureName $featureName
+        $currentState = $features["$featureName"]
         
         if ($null -eq $currentState) {
             Write-Log -Level "WARN" -Message "Feature not found: $featureName"
@@ -68,7 +45,6 @@ function Test-FeatureState {
         }
         
         $isDesired = Test-FeatureInDesiredState -DesiredState $desiredState -CurrentState $currentState
-        
         if (-not $isDesired) {
             $allInDesiredState = $false
         }
@@ -134,31 +110,27 @@ function Set-FeatureState {
 }
 
 function Export-FeatureState {
-    <#
-    .SYNOPSIS
-        Exports the current Windows features state for bidirectional sync.
-    .DESCRIPTION
-        Captures currently enabled Windows optional features.
-        Exports features that are Enabled or Disabled (not Removed).
-    .PARAMETER FeatureNames
-        Optional array of specific feature names to export.
-    .OUTPUTS
-        Hashtable with feature names and their states
-    #>
     [CmdletBinding()]
     param(
         [string[]]$FeatureNames = @()
     )
 
     $result = @{}
-
     try {
-        $features = Invoke-AdminCommand { Get-WindowsOptionalFeature -Online | 
-            Where-Object { $_.State -eq 'Enabled' } |
-            Select-Object FeatureName, State }
-        foreach ($f in $features) {
-            $result[$f.FeatureName] = $f.State.ToString()
+        $features = Invoke-AdminCommand {
+            Get-WindowsOptionalFeature -Online |
+            Where-Object { $_.State -ne 'Removed' -or $_.State -ne "DisabledWithPayloadRemoved" } |
+            Select-Object FeatureName, @{ Name = 'State'; Expression = { $_.State.ToString() } }
         }
+
+        if ($FeatureNames.Count -gt 0) {
+            $features = $features | Where-Object {
+                $FeatureNames -contains $_.FeatureName
+            }
+        }
+
+        Write-Debug "Export Features:`n$($features | Out-String)"
+        foreach ($f in $features) { $result[$f.FeatureName] = $f.State }
     }
     catch {
         Write-Log -Level "ERROR" -Message "Failed to export feature state: $($_.Exception.Message)"

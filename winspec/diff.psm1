@@ -4,8 +4,8 @@
 
 # Import dependent modules
 Import-Module (Join-Path $PSScriptRoot "logging.psm1") -Force
-Import-Module (Join-Path $PSScriptRoot "state.psm1") -Force
 Import-Module (Join-Path $PSScriptRoot "utils.psm1") -Force
+Import-Module (Join-Path $PSScriptRoot "state.psm1") -Force
 
 function Invoke-Diff {
     <#
@@ -50,7 +50,7 @@ function Invoke-Diff {
     
     Write-Log -Level "INFO" -Message "Starting diff operation..."
     
-    $differences = Compare-SystemState -Spec $source -Against $against -Providers $Providers
+    $differences = Compare-SystemState -Spec $Spec -Against $Against -Providers $Providers
     if ($null -eq $differences) {
         Write-Log -Level "ERROR" -Message "Failed to compare system state"
         return $null
