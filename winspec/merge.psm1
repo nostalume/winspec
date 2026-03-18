@@ -3,7 +3,7 @@
 # Implements the 'merge' command as part of Git-like workflow
 
 # Import dependent modules
-Import-Module (Join-Path $PSScriptRoot "logging.psm1") -Force
+Import-Module (Join-Path $PSScriptRoot "logging.psm1") -Force -Global
 Import-Module (Join-Path $PSScriptRoot "utils.psm1") -Force
 
 # =============================================================================

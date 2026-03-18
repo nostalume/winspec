@@ -240,7 +240,6 @@ function Compare-ServiceState {
         $config = $Desired[$name]
 
         if (-not $system) {
-
             $diffs += @{
                 Type        = "Added"
                 Path        = $path
@@ -286,96 +285,54 @@ function Compare-ServiceState {
     return $diffs
 }
 
-function Get-ServiceMockState {
+function Invoke-ServiceSandbox {
     <#
-    .SYNOPSIS
-        Gets the service mock state from sandbox.
-    .DESCRIPTION
-        Returns the current service state from the sandbox context.
-    .OUTPUTS
-        Hashtable with service names and startup types
-    #>
-    [CmdletBinding()]
-    param()
-    
-    # Module already imported at module scope - no need to import again
-    
-    if (Test-SandboxActive) {
-        return Get-SandboxState -Provider "Service"
-    }
-    
-    return @{}
-}
+.SYNOPSIS
+Simulates Windows service configuration changes inside sandbox.
+#>
 
-function Set-ServiceMockState {
-    <#
-    .SYNOPSIS
-        Sets the service mock state in sandbox.
-    .DESCRIPTION
-        Updates the current service state in the sandbox context.
-    .PARAMETER State
-        Hashtable with service names and startup types
-    #>
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory = $true)]
-        [hashtable]$State
-    )
-    
-    # Module already imported at module scope
-    
-    if (Test-SandboxActive) {
-        Set-SandboxState -Provider "Service" -State $State
-    }
-}
-
-function Invoke-ServiceSandboxApply {
-    <#
-    .SYNOPSIS
-        Applies service state changes in sandbox mode.
-    .DESCRIPTION
-        Simulates service changes in the sandbox context.
-    .PARAMETER Desired
-        Desired service state hashtable
-    .OUTPUTS
-        Hashtable with Status and Changed arrays
-    #>
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $true)]
+        [Parameter(Mandatory)]
         [hashtable]$Desired
     )
-    
-    # Module already imported at module scope
-    
-    if (-not (Test-SandboxActive)) {
-        throw "Not in sandbox mode"
+
+    if (!Test-SandboxActive) {
+        throw "Sandbox not active"
     }
-    
-    $currentState = Get-SandboxState -Provider "Service"
-    
+
     $results = @{
         Status  = "Success"
         Changed = @()
     }
-    
-    foreach ($service in $Desired.Keys) {
-        $currentStartup = if ($currentState[$service]) { $currentState[$service].Startup } else { $null }
-        $desiredStartup = $Desired[$service].Startup
-        
-        if ($currentStartup -ne $desiredStartup) {
-            $results.Changed += @{
-                Name       = $service
-                OldStartup = $currentStartup
-                NewStartup = $desiredStartup
+
+    Update-SandboxState "Service" {
+
+        param($state)
+
+        foreach ($service in $Desired.Keys) {
+
+            $desiredStartup = $Desired[$service].Startup
+            $currentStartup = if ($state[$service]) { $state[$service].Startup } else { $null }
+
+            if ($currentStartup -ne $desiredStartup) {
+
+                $results.Changed += @{
+                    Name       = $service
+                    OldStartup = $currentStartup
+                    NewStartup = $desiredStartup
+                }
+
+                $state[$service] = @{
+                    Startup = $desiredStartup
+                }
             }
-            $currentState[$service] = @{ Startup = $desiredStartup }
         }
+
     }
-    
-    Set-SandboxState -Provider "Service" -State $currentState
-    Add-SandboxChange -Provider "Service" -Change $results
-    
+
+    Update-SandboxChanges "Service" "Apply" $results
+
     return $results
 }
 
@@ -387,7 +344,5 @@ Export-ModuleMember -Function @(
     "Set-ServiceState"
     "Export-ServiceState"
     "Compare-ServiceState"
-    "Get-ServiceMockState"
-    "Set-ServiceMockState"
-    "Invoke-ServiceSandboxApply"
+    "Invoke-ServiceSandBox"
 )

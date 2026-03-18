@@ -267,107 +267,75 @@ function Compare-RegistryState {
     return $differences
 }
 
-function Get-RegistryMockState {
-    <#
-    .SYNOPSIS
-        Gets the registry mock state from sandbox.
-    .DESCRIPTION
-        Returns the current registry state from the sandbox context.
-    .OUTPUTS
-        Hashtable with registry categories
-    #>
-    [CmdletBinding()]
-    param()
-    
-    # Module already imported at module scope - no need to import again
-    
-    if (Test-SandboxActive) {
-        return Get-SandboxState -Provider "Registry"
-    }
-    
-    # Not in sandbox - return empty default
-    return @{}
-}
-
-function Set-RegistryMockState {
-    <#
-    .SYNOPSIS
-        Sets the registry mock state in sandbox.
-    .DESCRIPTION
-        Updates the current registry state in the sandbox context.
-    .PARAMETER State
-        Hashtable with registry categories
-    #>
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $true)]
-        [hashtable]$State
-    )
-    
-    # Module already imported at module scope
-    
-    if (Test-SandboxActive) {
-        Set-SandboxState -Provider "Registry" -State $State
-    }
-}
-
-function Invoke-RegistrySandboxApply {
+function Invoke-RegistrySandbox {
     <#
     .SYNOPSIS
         Applies registry state changes in sandbox mode.
+
     .DESCRIPTION
-        Simulates registry changes in the sandbox context.
+        Simulates registry changes in the sandbox context without touching
+        the real system registry.
+
     .PARAMETER Desired
-        Desired registry state hashtable
+        Desired registry state hashtable.
+
     .OUTPUTS
-        Hashtable with Status and Changed arrays
+        Hashtable with Status and Changed arrays.
     #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
         [hashtable]$Desired
     )
-    
-    # Module already imported at module scope
-    
-    if (-not (Test-SandboxActive)) {
-        throw "Not in sandbox mode"
+
+    if (!Test-SandboxActive) {
+        throw "Sandbox not active"
     }
-    
-    $currentState = Get-SandboxState -Provider "Registry"
-    
+
+    $providerName = "Registry"
+
     $results = @{
         Status  = "Success"
         Changed = @()
     }
-    
-    foreach ($category in $Desired.Keys) {
-        if (-not $currentState.ContainsKey($category)) {
-            $currentState[$category] = @{}
+
+    Update-SandboxState $providerName {
+        param($state)
+
+        if (-not $state) {
+            $state = @{}
         }
-        
-        foreach ($key in $Desired[$category].Keys) {
-            $oldValue = $currentState[$category][$key]
-            $newValue = $Desired[$category][$key]
-            
-            if ($oldValue -ne $newValue) {
-                $results.Changed += @{
-                    Category = $category
-                    Key      = $key
-                    OldValue = $oldValue
-                    NewValue = $newValue
+
+        foreach ($category in $Desired.Keys) {
+
+            if (-not $state.ContainsKey($category)) {
+                $state[$category] = @{}
+            }
+
+            foreach ($key in $Desired[$category].Keys) {
+
+                $oldValue = $state[$category][$key]
+                $newValue = $Desired[$category][$key]
+
+                if ($oldValue -ne $newValue) {
+
+                    $results.Changed += @{
+                        Category = $category
+                        Key      = $key
+                        OldValue = $oldValue
+                        NewValue = $newValue
+                    }
+
+                    $state[$category][$key] = $newValue
                 }
-                $currentState[$category][$key] = $newValue
             }
         }
+
+        return $state
     }
-    
-    # Update sandbox state
-    Set-SandboxState -Provider "Registry" -State $currentState
-    
-    # Record change
-    Add-SandboxChange -Provider "Registry" -Change $results
-    
+    # record change in sandbox history
+    Update-SandboxChanges "Registry" "Apply" $results
+
     return $results
 }
 
@@ -381,7 +349,5 @@ Export-ModuleMember -Function @(
     "Set-RegistryState"
     "Export-RegistryState"
     "Compare-RegistryState"
-    "Get-RegistryMockState"
-    "Set-RegistryMockState"
-    "Invoke-RegistrySandboxApply"
+    "Invoke-RegistrySandbox"
 )

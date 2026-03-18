@@ -3,6 +3,7 @@
 # Import dependent modules
 Import-Module (Join-Path $PSScriptRoot "..\logging.psm1") -Force
 Import-Module (Join-Path $PSScriptRoot "..\utils.psm1") -Force
+Import-Module (Join-Path $PSScriptRoot "..\sandbox.psm1") -Force -ErrorAction SilentlyContinue
 
 function Get-ProviderInfo {
     return @{
@@ -534,129 +535,84 @@ function Merge-ScoopState {
     return $result
 }
 
-function Get-ScoopMockState {
+function Invoke-ScoopSandbox {
     <#
-    .SYNOPSIS
-        Gets the package mock state from sandbox.
-    .DESCRIPTION
-        Returns the current package state from the sandbox context.
-    .OUTPUTS
-        Hashtable with apps and buckets arrays
-    #>
-    [CmdletBinding()]
-    param()
-    
-    Import-Module (Join-Path $PSScriptRoot "..\sandbox.psm1") -Force -ErrorAction SilentlyContinue
-    
-    if (Test-SandboxActive) {
-        $state = Get-SandboxState -Provider "Scoop"
-        return @{
-            apps    = $state.apps
-            buckets = $state.buckets
-        }
-    }
-    
-    # Not in sandbox - return empty default
-    return @{
-        apps    = @()
-        buckets = @()
-    }
-}
+.SYNOPSIS
+Simulates Scoop package changes inside sandbox.
+#>
 
-function Set-ScoopMockState {
-    <#
-    .SYNOPSIS
-        Sets the package mock state in sandbox.
-    .DESCRIPTION
-        Updates the current package state in the sandbox context.
-    .PARAMETER State
-        Hashtable with apps and buckets arrays
-    #>
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory = $true)]
-        [hashtable]$State
-    )
-    
-    Import-Module (Join-Path $PSScriptRoot "..\sandbox.psm1") -Force -ErrorAction SilentlyContinue
-    
-    if (Test-SandboxActive) {
-        Set-SandboxState -Provider "Scoop" -State $State
-    }
-}
-
-function Invoke-ScoopSandboxApply {
-    <#
-    .SYNOPSIS
-        Applies package state changes in sandbox mode.
-    .DESCRIPTION
-        Simulates package installation/removal in the sandbox context.
-    .PARAMETER Desired
-        Desired package state hashtable
-    .OUTPUTS
-        Hashtable with Status, Installed, Removed arrays
-    #>
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $true)]
+        [Parameter(Mandatory)]
         [hashtable]$Desired
     )
-    
-    Import-Module (Join-Path $PSScriptRoot "..\sandbox.psm1") -Force -ErrorAction SilentlyContinue
-    
-    if (-not (Test-SandboxActive)) {
-        throw "Not in sandbox mode"
+
+    if (!Test-SandboxActive) {
+        throw "Sandbox not active"
     }
-    
-    $currentState = Get-SandboxState -Provider "Scoop"
-    $currentApps = @($currentState.apps | ForEach-Object { $_.name })
-    
-    # Handle both simple and extended format for Installed
-    $desiredApps = @()
-    if ($Desired.Installed) {
-        foreach ($pkg in $Desired.Installed) {
-            $desiredApps += Get-PackageName -Package $pkg
-        }
-    }
-    
+
     $results = @{
         Status           = "Success"
         Installed        = @()
         Removed          = @()
         AlreadyInstalled = @()
     }
-    
-    # Simulate installations
-    foreach ($package in $desiredApps) {
-        if ($package -notin $currentApps) {
-            $currentState.apps += @{
-                name    = $package
-                version = "latest"
-                bucket  = "main"
-            }
-            $results.Installed += $package
-        }
-        else {
-            $results.AlreadyInstalled += $package
-        }
-    }
-    
-    # Track removal if specified
-    if ($Desired.Removed) {
-        foreach ($package in $Desired.Removed) {
-            if ($package -in $currentApps) {
-                $currentState.apps = @($currentState.apps | Where-Object { $_.name -ne $package })
-                $results.Removed += $package
+
+    Update-SandboxState "Scoop" {
+        param($state)
+        $currentApps = @($state.apps.name)
+
+        # -----------------------------
+        # normalize desired packages
+        # -----------------------------
+
+        $desiredApps = @()
+        if ($Desired.Installed) {
+            foreach ($pkg in $Desired.Installed) {
+                $desiredApps += Get-PackageName -Package $pkg
             }
         }
+
+        # -----------------------------
+        # simulate install
+        # -----------------------------
+
+        foreach ($pkg in $desiredApps) {
+            if ($pkg -notin $currentApps) {
+                $state.apps += @{
+                    name    = $pkg
+                    version = "latest"
+                    bucket  = "main"
+                }
+                $results.Installed += $pkg
+            }
+            else {
+                $results.AlreadyInstalled += $pkg
+            }
+        }
+
+        # -----------------------------
+        # simulate removal
+        # -----------------------------
+
+        if ($Desired.Removed) {
+
+            foreach ($pkg in $Desired.Removed) {
+
+                if ($pkg -in $currentApps) {
+
+                    $state.apps =
+                    @($state.apps | Where-Object { $_.name -ne $pkg })
+
+                    $results.Removed += $pkg
+                }
+            }
+        }
+
     }
-    
-    # Update sandbox state
-    Set-SandboxState -Provider "Scoop" -State $currentState
-    
-    # Record change
-    Add-SandboxChange -Provider "Scoop" -Change $results
-    
+    # record change in sandbox history
+    Update-SandboxChanges "Scoop" "Apply" $results
+
     return $results
 }
 
@@ -674,7 +630,5 @@ Export-ModuleMember -Function @(
     "Export-ScoopState"
     "Compare-ScoopState"
     "Merge-ScoopState"
-    "Get-ScoopMockState"
-    "Set-ScoopMockState"
-    "Invoke-ScoopSandboxApply"
+    "Invoke-ScoopSandBox"
 )

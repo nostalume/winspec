@@ -3,7 +3,7 @@
 
 # Import dependent modules
 $ModuleRoot = $PSScriptRoot
-Import-Module (Join-Path $ModuleRoot "logging.psm1") -ErrorAction Stop
+Import-Module (Join-Path $ModuleRoot "logging.psm1") -ErrorAction Stop -Global
 Import-Module (Join-Path $ModuleRoot "utils.psm1") -ErrorAction Stop
 Import-Module (Join-Path $ModuleRoot "checkpoint.psm1") -ErrorAction Stop
 Import-Module (Join-Path $ModuleRoot "schema.psm1") -ErrorAction Stop
@@ -219,7 +219,7 @@ function Resolve-ProviderCommand {
     [CmdletBinding()]
     param(
         [pscustomobject]$Provider,
-        [ValidateSet("Export","Merge")]
+        [ValidateSet("Export", "Merge", "Compare", "Test", "Set")]
         [string]$Operation
     )
 
@@ -392,83 +392,91 @@ function Compare-SystemState {
 # =============================================================================
 # 
 function Invoke-Manager {
-    <#
+<#
 .SYNOPSIS
     Executes a single declarative provider.
 #>
+
     [CmdletBinding(SupportsShouldProcess)]
     param(
         [Parameter(Mandatory)]
-        [pscustomobject]$Provider
+        [pscustomobject]$Provider,
+
+        [Parameter(Mandatory)]
+        $Config
     )
 
     $providerName = $Provider.Name
     $providerPath = $Provider.Path
-    $result = @{}
 
     Write-LogSection -Name $providerName
+
+    # ------------------------------------------------------------
+    # Load provider
+    # ------------------------------------------------------------
 
     try {
         Import-Module $providerPath -ErrorAction Stop
     }
     catch {
-        Write-Log -Level "ERROR" -Message "Failed to load provider: $providerName"
-        return @{ Status = "Error"; Message = "Failed to load provider" }
+        Write-Log -Level ERROR -Message "Failed to load provider: $providerName"
+        return @{ Status = "Error"; Message = "Provider load failed" }
     }
 
     $desired = $Config.$providerName
 
     $testStateCmd = Get-Command "Test-$($providerName)State" -ErrorAction SilentlyContinue
-    $setStateCmd = Get-Command "Set-$($providerName)State"  -ErrorAction SilentlyContinue
+    $setStateCmd  = Get-Command "Set-$($providerName)State"  -ErrorAction SilentlyContinue
+    $sandboxCmd   = Get-Command "Invoke-$($providerName)SandboxApply" -ErrorAction SilentlyContinue
 
-    $isSandbox = Test-SandboxActive
-    $sandboxMode = if ($isSandbox) { Get-SandboxMode } else { "Live" }
-
-    $sandboxApplyCmd = $null
-    if ($isSandbox -and $sandboxMode -eq "Mock") {
-        $sandboxApplyCmd = Get-Command "Invoke-$($providerName)SandboxApply" -ErrorAction SilentlyContinue
+    if (!$testStateCmd -or !$setStateCmd) {
+        Write-Log -Level ERROR -Message "Provider $providerName missing required functions"
+        return @{ Status = "Error"; Message = "Missing provider functions" }
     }
 
-    if ($null -eq $testStateCmd -or $null -eq $setStateCmd) {
-        Write-Log -Level "ERROR" -Message "Provider $providerName missing required functions"
-        return @{ Status = "Error"; Message = "Missing provider functions" }
+    $mode = "Live"
+    if (Test-SandboxActive) {
+        $mode = Get-SandboxMode
     }
 
     try {
         $inDesiredState = & $testStateCmd -Desired $desired
     }
     catch {
-        Write-Log -Level "ERROR" -Message "Provider $providerName test failed: $_"
-        return @{ Status = "Error"; Message = "Test failed: $_" }
+        Write-Log -Level ERROR -Message "$providerName test failed: $_"
+        return @{ Status = "Error"; Message = "Test failed" }
     }
 
     if ($inDesiredState) {
-        Write-Log -Level "OK"  -Message "$providerName already in desired state"
+        Write-Log -Level OK -Message "$providerName already in desired state"
         return @{ Status = "AlreadyInDesiredState" }
     }
 
-    if ($WhatIf -or $sandboxMode -eq "DryRun") {
-        Write-Log -Level "INFO" -Message "Would apply $providerName changes (dry run)"
-        return @{ Status = "DryRun"; Changes = "Pending" }
+    if ($mode -eq "DryRun") {
+        Write-Log -Level INFO -Message "DryRun: $providerName would apply changes"
+        return @{
+            Status  = "DryRun"
+            Pending = $true
+        }
     }
 
     if ($PSCmdlet.ShouldProcess($providerName, "Apply configuration")) {
+
         try {
-            if ($sandboxApplyCmd) {
-                $result = & $sandboxApplyCmd -Desired $desired
-                Write-Log -Level "INFO" -Message "[SANDBOX] Applied $providerName"
+            if ($mode -eq "Mock" -and $sandboxCmd) {
+                $result = & $sandboxCmd -Desired $desired
+                Write-Log -Level INFO -Message "[SANDBOX] $providerName applied"
+                return $result
             }
-            else {
-                $result = & $setStateCmd -Desired $desired
-            }
+
+            $result = & $setStateCmd -Desired $desired
+            return $result
         }
         catch {
-            Write-Log -Level "ERROR" -Message "Provider $providerName set failed: $_"
-            return @{ Status = "Error"; Message = "Set failed: $_" }
+            Write-Log -Level ERROR -Message "$providerName set failed: $_"
+            return @{ Status = "Error"; Message = "Set failed" }
         }
     }
-
-    return $result
 }
 
 function Invoke-Managers {
@@ -503,6 +511,7 @@ function Invoke-Managers {
 
         $results[$name] = Invoke-Manager `
             -Provider $provider `
+    
     }
 
     return $results
@@ -512,7 +521,8 @@ function Invoke-Managers {
 # TRIGGER EXECUTION
 # =============================================================================
 
-function Invoke-Trigger {
+# Avoid name confliction
+function Invoke-TriggerProvider {
     [CmdletBinding(SupportsShouldProcess)]
     param(
         [Parameter(Mandatory)]
@@ -524,17 +534,32 @@ function Invoke-Trigger {
     $name = $Provider.Name
     $path = $Provider.Path
 
-    Write-LogSection -Name "$name"
+    # Sandbox handling (triggers are non-idempotent)
+    if (Test-SandboxActive) {
+        $mode = Get-SandboxMode
+        Write-Log -Level "INFO" -Message "Sandbox ($mode): Trigger '$name' would execute"
+
+        $change = @{
+            Status  = "Simulated"
+            Trigger = $name
+            Value   = $Value
+            Mode    = $mode
+        }
+
+        Update-SandboxChanges -Provider "Trigger" -Data $change -Action "Trigger Simulated"
+        return $change
+    }
 
     try {
-        Import-Module $path -ErrorAction Stop
+        $module = Import-Module $path -PassThru -ErrorAction Stop
     }
     catch {
         Write-Log -Level "ERROR" -Message "Failed to load trigger: $name"
         return @{ Status = "Error"; Message = "Failed to load trigger" }
     }
 
-    $cmd = Get-Command "Invoke-Trigger" -ErrorAction SilentlyContinue
+    $cmd = $module.ExportedCommands["Invoke-Trigger"]
+
     if (-not $cmd) {
         Write-Log -Level "ERROR" -Message "Trigger $name missing invoke function"
         return @{ Status = "Error"; Message = "Missing trigger function" }
@@ -551,7 +576,6 @@ function Invoke-Trigger {
     }
 }
 
-
 function Invoke-Triggers {
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -565,6 +589,7 @@ function Invoke-Triggers {
         -UserTrigger $Triggers `
         -ConfigPath $ConfigPath
 
+    Write-Debug "Triggers: $($triggers | Out-String)"
     $results = @{}
 
     foreach ($t in $triggers) {
@@ -572,7 +597,7 @@ function Invoke-Triggers {
         $provider = $t.Provider
         $value = $t.Value
 
-        $results[$name] = Invoke-Trigger `
+        $results[$name] = Invoke-TriggerProvider `
             -Provider $provider `
             -Value $value
     }
@@ -703,12 +728,17 @@ Export-ModuleMember -Function @(
     "Get-Managers"
     "Get-Triggers"
     "Resolve-ProviderList"
+    "Resolve-ProviderCommand"
+    "Resolve-Triggers"
+    # cache
+    "Clear-SystemStateCache"
     # execution
     "Invoke-WinSpec"
     "Invoke-Managers"
     "Invoke-Triggers"
     # export state
     "Get-SystemState"
+    "Export-ProviderState"
     # compare
     "Compare-ProviderState"
     "Compare-SystemState"

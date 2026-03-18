@@ -99,9 +99,6 @@ function Invoke-Diff {
     return $summary
 }
 
-# Alias for backward compatibility
-# Set-Alias -Name "Compare-SystemState" -Value "Invoke-Diff" -Scope Global
-
 Export-ModuleMember -Function @(
     "Invoke-Diff"
 )

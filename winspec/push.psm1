@@ -17,84 +17,84 @@ function Invoke-Push {
         Pushes configuration to the system.
     .DESCRIPTION
         Applies a configuration spec to the system.
-    .PARAMETER Spec
-        Path to the configuration spec file.
-    .PARAMETER ConfigPath
-        Configuration directory path.
-    .PARAMETER DryRun
-        Preview changes without applying.
-    .PARAMETER Checkpoint
-        Create restore point before applying.
-    .PARAMETER WithTriggers
-        Include trigger execution.
-    .PARAMETER Providers
-        Apply only specific providers.
-    .OUTPUTS
-        Hashtable with execution results.
     #>
+
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $false)]
         [hashtable]$Spec,
-        
+
         [Parameter(Mandatory = $false)]
         [string[]]$Providers,
 
         [Parameter(Mandatory = $false)]
         $Triggers,
-        
+
         [Parameter(Mandatory = $false)]
         [switch]$DryRun,
 
         [Parameter(Mandatory = $false)]
         [string]$ConfigPath,
-        
+
         [Parameter(Mandatory = $false)]
         [switch]$Checkpoint
     )
-    
+
     Write-LogHeader -Title "WinSpec Push"
-    
-    # Handle sandbox mode
+
     Import-Module (Join-Path $PSScriptRoot "sandbox.psm1") -Force
-    $sandboxModeValue = "Live"
-    $isSandbox = $false
-    
-    $isSandbox = Test-SandboxActive
-    if ($isSandbox) {
-        $sandboxModeValue = Get-SandboxMode
-        Write-LogHeader "SANDBOX MODE: $sandboxModeValue"
+
+    # Detect existing sandbox
+    $sandboxAlreadyActive = Test-SandboxActive
+    $sandboxMode = "Live"
+
+    if ($sandboxAlreadyActive) {
+        $sandboxMode = Get-SandboxMode
+        Write-LogHeader "SANDBOX MODE: $sandboxMode"
     }
     elseif ($DryRun) {
-        $sandboxModeValue = "DryRun"
+        $sandboxMode = "DryRun"
     }
-    
+
+    $enteredSandbox = $false
+
     # Enter sandbox if needed
-    if ($sandboxModeValue -ne "Live") {
-        Enter-Sandbox -Mode $sandboxModeValue
+    if (-not $sandboxAlreadyActive -and $sandboxMode -ne "Live") {
+        Enter-Sandbox -Mode $sandboxMode
+        $enteredSandbox = $true
+        Write-LogHeader "SANDBOX MODE: $sandboxMode"
     }
-    
-    $result = Invoke-WinSpec -Spec $Spec -ConfigPath $ConfigPath -Providers $Providers -Triggers $Triggers -Checkpoint:$Checkpoint 
-    
-    # Handle results
+
+    # Execute spec
+    $result = Invoke-WinSpec `
+        -Spec $Spec `
+        -ConfigPath $ConfigPath `
+        -Providers $Providers `
+        -Triggers $Triggers `
+        -Checkpoint:$Checkpoint
+
     if (-not $result.Success) {
         Write-Log -Level "ERROR" -Message "Push failed"
-        return $result
     }
-    
-    # Exit sandbox if entered
-    if ($isSandbox) {
+
+    # Show sandbox summary
+    if (Test-SandboxActive) {
         $changes = Get-SandboxChanges
         if ($changes.Count -gt 0) {
             Write-Host ""
             Write-Host "=== Sandbox Changes Summary ===" -ForegroundColor Cyan
+
             foreach ($change in $changes) {
                 Write-Host "$($change.Provider): $($change.Details.Status)"
             }
         }
-        Exit-Sandbox -DiscardChanges:($sandboxModeValue -eq "DryRun")
     }
-    
+
+    # Exit sandbox only if we created it
+    if ($enteredSandbox) {
+        Exit-Sandbox -DiscardChanges:($sandboxMode -eq "DryRun")
+    }
+
     Write-Host ""
     Write-Log -Level "OK" -Message "Push completed successfully"
     return $result

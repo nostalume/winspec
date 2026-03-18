@@ -2,7 +2,7 @@
 # Consolidates common functionality across diff, merge, and sync modules
 
 # Import dependent modules
-Import-Module (Join-Path $PSScriptRoot "logging.psm1") -ErrorAction Stop
+Import-Module (Join-Path $PSScriptRoot "logging.psm1") -ErrorAction Stop -Global
 
 # =============================================================================
 # HASHTABLE EXPORT - Unified hashtable-to-string conversion

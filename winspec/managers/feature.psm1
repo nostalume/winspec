@@ -206,96 +206,67 @@ function Compare-FeatureState {
     return $differences
 }
 
-function Get-FeatureMockState {
-    <#
-    .SYNOPSIS
-        Gets the feature mock state from sandbox.
-    .DESCRIPTION
-        Returns the current feature state from the sandbox context.
-    .OUTPUTS
-        Hashtable with feature names and states
-    #>
-    [CmdletBinding()]
-    param()
-    
-    # Module already imported at module scope - no need to import again
-    
-    if (Test-SandboxActive) {
-        return Get-SandboxState -Provider "Feature"
-    }
-    
-    return @{}
-}
-
-function Set-FeatureMockState {
-    <#
-    .SYNOPSIS
-        Sets the feature mock state in sandbox.
-    .DESCRIPTION
-        Updates the current feature state in the sandbox context.
-    .PARAMETER State
-        Hashtable with feature names and states
-    #>
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $true)]
-        [hashtable]$State
-    )
-    
-    # Module already imported at module scope
-    
-    if (Test-SandboxActive) {
-        Set-SandboxState -Provider "Feature" -State $State
-    }
-}
-
-function Invoke-FeatureSandboxApply {
+function Invoke-FeatureSandbox {
     <#
     .SYNOPSIS
         Applies feature state changes in sandbox mode.
+
     .DESCRIPTION
-        Simulates feature changes in the sandbox context.
+        Simulates feature changes in the sandbox context without touching
+        the real system feature configuration.
+
     .PARAMETER Desired
-        Desired feature state hashtable
+        Desired feature state hashtable.
+
     .OUTPUTS
-        Hashtable with Status and Changed arrays
+        Hashtable with Status and Changed arrays.
     #>
+
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
         [hashtable]$Desired
     )
-    
-    # Module already imported at module scope
-    
-    if (-not (Test-SandboxActive)) {
-        throw "Not in sandbox mode"
+
+    if (!Test-SandboxActive) {
+        throw "Sandbox not active"
     }
-    
-    $currentState = Get-SandboxState -Provider "Feature"
-    
+
+    $providerName = "Feature"
+
     $results = @{
         Status  = "Success"
         Changed = @()
     }
-    
-    foreach ($feature in $Desired.Keys) {
-        $currentValue = $currentState[$feature]
-        $desiredValue = $Desired[$feature]
-        
-        if ($currentValue -ne $desiredValue) {
-            $results.Changed += @{
-                Name     = $feature
-                OldValue = $currentValue
-                NewValue = $desiredValue
-            }
-            $currentState[$feature] = $desiredValue
+
+    Update-SandboxState $providerName {
+        param($state)
+
+        if (-not $state) {
+            $state = @{}
         }
+        foreach ($feature in $Desired.Keys) {
+
+            $currentValue = $state[$feature]
+            $desiredValue = $Desired[$feature]
+
+            if ($currentValue -ne $desiredValue) {
+
+                $results.Changed += @{
+                    Name     = $feature
+                    OldValue = $currentValue
+                    NewValue = $desiredValue
+                }
+
+                $state[$feature] = $desiredValue
+            }
+        }
+
+        return $state
     }
-    
-    Set-SandboxState -Provider "Feature" -State $currentState
-    Add-SandboxChange -Provider "Feature" -Change $results
-    
+    # record change in sandbox history
+    Update-SandboxChanges "Feature" "Apply" $results
+
     return $results
 }
 
@@ -307,7 +278,5 @@ Export-ModuleMember -Function @(
     "Set-FeatureState"
     "Export-FeatureState"
     "Compare-FeatureState"
-    "Get-FeatureMockState"
-    "Set-FeatureMockState"
-    "Invoke-FeatureSandboxApply"
+    "Invoke-FeatureSandbox"
 )

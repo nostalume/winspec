@@ -186,6 +186,7 @@ Export-ModuleMember -Function @(
 **Trigger Script Requirements:**
 - Accept `Invoke-Trigger`(fixed identifier) function
 - Accept `$Option`(fixed identifier) parameter (any type)
+- Avoid Key Word for repeated module name like `scoop, winget, service, feature, registry`
 - Support `-WhatIf` switch for dry run
 - Return hashtable with `Status` key: `"Success"`, `"Error"`, `"DryRun"`, `"Skipped"`
 - Optionally include `Message` for details
