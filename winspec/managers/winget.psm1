@@ -86,7 +86,7 @@ function Invoke-WingetCommand {
     if ($process.ExitCode -ne 0) {
         Write-Debug "Winget command exited with non-zero code: $($process.ExitCode)"
         if ($stderr) {
-            Write-Log -Level "WARNING" -Message "Winget command exited with code $($process.ExitCode): $stderr"
+            Write-Log -Level "WARN" -Message "Winget command exited with code $($process.ExitCode): $stderr"
         }
     }
     
@@ -94,10 +94,10 @@ function Invoke-WingetCommand {
 }
 
 # Helper function to extract packages from winget export
-function Parse-WingetExportJson {
+function ConvertFrom-WingetExportJson {
     <#
     .SYNOPSIS
-        Parses winget export JSON and extracts packages and sources.
+        Converts winget export JSON and extracts packages and sources.
     .PARAMETER JsonContent
         Raw JSON content from winget export
     .OUTPUTS
@@ -108,7 +108,7 @@ function Parse-WingetExportJson {
         [string]$JsonContent
     )
     
-    Write-Debug "Parse-WingetExportJson called with content length: $($JsonContent.Length)"
+    Write-Debug "ConvertFrom-WingetExportJson called with content length: $($JsonContent.Length)"
     
     if ([string]::IsNullOrWhiteSpace($JsonContent)) {
         Write-Debug "JsonContent is null or whitespace, returning empty"
@@ -219,7 +219,7 @@ function Get-WingetExport {
         Write-Debug "JSON content length: $($jsonContent.Length)"
         Write-Debug "JSON content preview: $($jsonContent.Substring(0, [Math]::Min(200, $jsonContent.Length)))"
         
-        return Parse-WingetExportJson -JsonContent $jsonContent
+        return ConvertFrom-WingetExportJson -JsonContent $jsonContent
     }
     catch {
         Write-Log -Level "ERROR" -Message "Failed to get Winget export: $($_.Exception.Message)"
@@ -632,6 +632,8 @@ function Merge-WingetState {
 Export-ModuleMember -Function @(
     'Get-ProviderInfo',
     'Test-WingetInstalled',
+    'Invoke-WingetCommand',
+    'ConvertFrom-WingetExportJson',
     'Get-WingetExport',
     'Get-InstalledWingetPackages',
     'Get-WingetPackageInfo',

@@ -13,10 +13,6 @@ function Get-ProviderInfo {
     }
 }
 
-function Get-ProviderInfo {
-    return @{ Name = "Registry"; Type = "Declarative" }
-}
-
 function Get-RegistryValue {
     [CmdletBinding()]
     param (
@@ -155,7 +151,8 @@ function Set-RegistryState {
                 continue
             }
 
-            Write-LogChange -Name "$category.$propName" -CurrentValue $currentState -DesiredValue $desiredValue
+            $currentStateStr = if ($null -eq $currentState) { "(null)" } else { [string]$currentState }
+            Write-LogChange -Name "$category.$propName" -CurrentValue $currentStateStr -DesiredValue $desiredValue
 
             if ($PSCmdlet.ShouldProcess("$($catConfig.Path)\$($propConfig.Name)", "Set to '$desiredValue'")) {
                 try {

@@ -57,7 +57,7 @@ function Get-ServiceState {
 
     $services = Get-Service -ErrorAction SilentlyContinue
     
-    Write-Host "Services: $($servicesa | Format-Table | Out-String)"
+    Write-Verbose "Services: $($services | Format-Table | Out-String)"
     if ($ServiceNames) {
         $services = $services | Where-Object Name -in $ServiceNames
     }
@@ -205,7 +205,7 @@ function Export-ServiceState {
         $ServiceNames = $WindowsConfigurableServices
     }
     
-    Write-Host "$ServiceNames"
+    Write-Verbose "Exporting service state for: $($ServiceNames -join ', ')"
     
     $states = Get-ServiceState -ServiceNames $ServiceNames
     $result = @{}

@@ -53,6 +53,25 @@ function Test-FeatureState {
     return $allInDesiredState
 }
 
+function Get-FeatureState {
+    <#
+    .SYNOPSIS
+        Gets the state of a single Windows optional feature.
+    .PARAMETER FeatureName
+        The name of the Windows optional feature.
+    .OUTPUTS
+        String state ("Enabled", "Disabled") or $null if not found.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FeatureName
+    )
+
+    $features = Export-FeatureState -FeatureNames @($FeatureName)
+    return $features[$FeatureName]
+}
+
 function Set-FeatureState {
     [CmdletBinding(SupportsShouldProcess = $true)]
     param (
@@ -86,12 +105,12 @@ function Set-FeatureState {
             try {
                 if ($desiredState -eq "enabled") {
                     Invoke-AdminCommand {
-                        Enable-WindowsOptionalFeature -Online -FeatureName '$featureName' -NoRestart -All
+                        Enable-WindowsOptionalFeature -Online -FeatureName $featureName -NoRestart -All
                     }
                 }
                 else {
                     Invoke-AdminCommand {
-                        Disable-WindowsOptionalFeature -Online -FeatureName '$featureName' -NoRestart
+                        Disable-WindowsOptionalFeature -Online -FeatureName $featureName -NoRestart
                     }
                 }
                 
@@ -119,7 +138,7 @@ function Export-FeatureState {
     try {
         $features = Invoke-AdminCommand {
             Get-WindowsOptionalFeature -Online |
-            Where-Object { $_.State -ne 'Removed' -or $_.State -ne "DisabledWithPayloadRemoved" } |
+            Where-Object { $_.State -ne 'Removed' -and $_.State -ne "DisabledWithPayloadRemoved" } |
             Select-Object FeatureName, @{ Name = 'State'; Expression = { $_.State.ToString() } }
         }
 

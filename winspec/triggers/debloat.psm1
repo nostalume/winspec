@@ -32,7 +32,7 @@ function Invoke-Trigger {
     
     if ($Option -is [string]) {
         # Simple string option like "silent"
-        if ($Option -ne $true) {
+        if ($Option -ne "default") {
             $scriptOptions += "-$Option"
         }
     }
@@ -88,5 +88,5 @@ function Invoke-Trigger {
 
 Export-ModuleMember -Function @(
     "Get-ProviderInfo"
-    "Invoke-DebloatTrigger"
+    "Invoke-Trigger"
 )

@@ -331,11 +331,11 @@ function Get-Spec {
     $specPath = Resolve-SpecPath $Path
     if (-not $specPath) { return $null }
 
-    Write-Log "INFO" "Loading configuration: $specPath"
+    Write-Log -Level "INFO" -Message "Loading configuration: $specPath"
 
     $config = Import-Configuration $specPath
     if ($null -eq $config -or $config.Count -eq 0) {
-        Write-Log "ERROR" "Configuration is empty"
+        Write-Log -Level "ERROR" -Message "Configuration is empty"
         return $null
     }
 

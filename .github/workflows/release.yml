@@ -21,28 +21,28 @@ jobs:
         id: get_version
         run: |
           # Remove 'v' prefix from version for scoop manifest
-          VERSION=${GITHUB_REF#refs/tags/}
-          VERSION_WITHOUT_V=${VERSION#v}
-          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
-          echo "VERSION_WITHOUT_V=$VERSION_WITHOUT_V" >> $GITHUB_OUTPUT
+          TAG=${GITHUB_REF#refs/tags/}
+          VER=${TAG#v}
+          echo "TAG=$TAG" >> $GITHUB_OUTPUT
+          echo "VER=$VER" >> $GITHUB_OUTPUT
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.get_version.outputs.VERSION }}
-          name: WinSpec ${{ steps.get_version.outputs.VERSION }}
+          tag_name: ${{ steps.get_version.outputs.TAG }}
+          name: WinSpec ${{ steps.get_version.outputs.TAG }}
           generate_release_notes: true
           draft: false
-          prerelease: ${{ contains(steps.get_version.outputs.VERSION, '-rc') || contains(steps.get_version.outputs.VERSION, '-beta') || contains(steps.get_version.outputs.VERSION, '-alpha') }}
+          prerelease: ${{ contains(steps.get_version.outputs.TAG, '-rc') || contains(steps.get_version.outputs.TAG, '-beta') || contains(steps.get_version.outputs.TAG, '-alpha') }}
 
       - name: Update Scoop manifest
         run: |
-          VERSION=${{ steps.get_version.outputs.VERSION_WITHOUT_V }}
+          TAG=${{ steps.get_version.outputs.VER }}
           
           # Update winspec.json using jq
-          jq --arg version "$VERSION" \
-             --arg url "https://github.com/lvyuemeng/winspec/archive/refs/tags/v$VERSION.zip" \
-             --arg extract_dir "winspec-$VERSION" \
+          jq --arg version "$TAG" \
+             --arg url "https://github.com/lvyuemeng/winspec/archive/refs/tags/v$TAG.zip" \
+             --arg extract_dir "winspec-$TAG" \
              '.version = $version | .url = $url | .extract_dir = $extract_dir' \
              winspec.json > winspec.json.tmp && mv winspec.json.tmp winspec.json
 
@@ -51,7 +51,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add winspec.json
-          git commit -m "chore: update scoop manifest for ${{ steps.get_version.outputs.VERSION }}" || echo "No changes to commit"
+          git commit -m "chore: update scoop manifest for ${{ steps.get_version.outputs.TAG }}" || echo "No changes to commit"
           
       - name: Push changes
         run: |

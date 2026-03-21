@@ -93,7 +93,7 @@ function Invoke-ScoopCommand {
     $process.WaitForExit()
 
     if ($process.ExitCode -ne 0) {
-        Write-Log -Level WARNING -Message "Scoop exited with code $($process.ExitCode): $stderr"
+        Write-Log -Level WARN -Message "Scoop exited with code $($process.ExitCode): $stderr"
     }
 
     return $stdout
@@ -520,7 +520,7 @@ function Merge-ScoopState {
     )
     
     # Use generic package merge
-    $result = Merge-PackageState -SystemState $SystemState -SpecState $ExistingConfig
+    $result = Merge-PackageState -SystemState $SystemState -ExistingConfig $ExistingConfig
     
     # Use generic bucket merge
     $mergedBuckets = Merge-SourceCollection `

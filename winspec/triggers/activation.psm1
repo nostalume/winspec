@@ -28,7 +28,7 @@ function Invoke-Trigger {
             $arguments += "-$($Option.Method)"
         }
     }
-    elseif ($Option -is [string] -and $Option -ne $true) {
+    elseif ($Option -is [string] -and $Option -ne "default") {
         # String option like "KMS38"
         $arguments += "-$Option"
     }
@@ -73,5 +73,5 @@ function Invoke-Trigger {
 
 Export-ModuleMember -Function @(
     "Get-ProviderInfo"
-    "Invoke-ActivationTrigger"
+    "Invoke-Trigger"
 )

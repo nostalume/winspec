@@ -94,5 +94,5 @@ function Invoke-Trigger {
 
 Export-ModuleMember -Function @(
     "Get-ProviderInfo"
-    "Invoke-OfficeTrigger"
+    "Invoke-Trigger"
 )

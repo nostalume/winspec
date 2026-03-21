@@ -558,11 +558,11 @@ switch ($Command) {
             return
         }
         Write-Log INFO "Captured providers: $($systemState.Keys -join ', ')"
-        if ($outputPath) {
-            if ($PSCmdlet.ShouldProcess($outputPath, "Save spec")) {
+        if ($Output) {
+            if ($PSCmdlet.ShouldProcess($Output, "Save spec")) {
                 Save-Configuration `
                     -Config $systemState `
-                    -Path $outputPath `
+                    -Path $Output `
                     -Format $Format
             }
         }
@@ -647,8 +647,6 @@ switch ($Command) {
         else { $pullParams['Output'] = $Spec }
         if ($Providers) { $pullParams['Providers'] = $Providers }
         if ($Interactive) { $pullParams['Interactive'] = $true }
-        if ($Template) { $pullParams['Template'] = $true }
-        if ($Minimal) { $pullParams['Minimal'] = $true }
         if ($DryRun) { $pullParams['DryRun'] = $true }
         if ($Name) { $pullParams['Name'] = $Name }
         if ($Description) { $pullParams['Description'] = $Description }

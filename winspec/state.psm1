@@ -328,12 +328,12 @@ function Compare-ProviderState {
     try {
         $cmd = Resolve-ProviderCommand -Provider $Provider -Operation Compare
         if ($cmd) {
-            $differences = & $compareFunc -System $Current -Desired $Desired
+            $differences = & $cmd -System $Current -Desired $Desired
         }
     }
     catch {
         Write-Log -Level "WARN" -Message "Failed to compare $($Provider.Name) state: $($_.Exception.Message)"
-        return $System
+        return @()
     }
     return $differences
 }
@@ -348,7 +348,7 @@ function Compare-SystemState {
     )
     
     $desiredConfig = $Spec
-    $systemConfig = $Against
+    $systemConfig = if ($null -eq $Against) { @{} } else { $Against }
     # Determine providers to compare
     $providersToCompare = Resolve-ProviderList -Providers $Providers | Where-Object {
         $desiredConfig.ContainsKey($_) -or $systemConfig.ContainsKey($_)
@@ -423,59 +423,65 @@ function Invoke-Manager {
         return @{ Status = "Error"; Message = "Provider load failed" }
     }
 
-    $desired = $Config.$providerName
-
-    $testStateCmd = Get-Command "Test-$($providerName)State" -ErrorAction SilentlyContinue
-    $setStateCmd  = Get-Command "Set-$($providerName)State"  -ErrorAction SilentlyContinue
-    $sandboxCmd   = Get-Command "Invoke-$($providerName)SandboxApply" -ErrorAction SilentlyContinue
-
-    if (!$testStateCmd -or !$setStateCmd) {
-        Write-Log -Level ERROR -Message "Provider $providerName missing required functions"
-        return @{ Status = "Error"; Message = "Missing provider functions" }
-    }
-
-    $mode = "Live"
-    if (Test-SandboxActive) {
-        $mode = Get-SandboxMode
-    }
-
     try {
-        $inDesiredState = & $testStateCmd -Desired $desired
-    }
-    catch {
-        Write-Log -Level ERROR -Message "$providerName test failed: $_"
-        return @{ Status = "Error"; Message = "Test failed" }
-    }
+        $desired = $Config.$providerName
 
-    if ($inDesiredState) {
-        Write-Log -Level OK -Message "$providerName already in desired state"
-        return @{ Status = "AlreadyInDesiredState" }
-    }
+        $testStateCmd = Get-Command "Test-$($providerName)State" -ErrorAction SilentlyContinue
+        $setStateCmd  = Get-Command "Set-$($providerName)State"  -ErrorAction SilentlyContinue
+        $sandboxCmd   = Get-Command "Invoke-$($providerName)SandboxApply" -ErrorAction SilentlyContinue
 
-    if ($mode -eq "DryRun") {
-        Write-Log -Level INFO -Message "DryRun: $providerName would apply changes"
-        return @{
-            Status  = "DryRun"
-            Pending = $true
+        if (!$testStateCmd -or !$setStateCmd) {
+            Write-Log -Level ERROR -Message "Provider $providerName missing required functions"
+            return @{ Status = "Error"; Message = "Missing provider functions" }
         }
-    }
 
-    if ($PSCmdlet.ShouldProcess($providerName, "Apply configuration")) {
+        $mode = "Live"
+        if (Test-SandboxActive) {
+            $mode = Get-SandboxMode
+        }
 
         try {
-            if ($mode -eq "Mock" -and $sandboxCmd) {
-                $result = & $sandboxCmd -Desired $desired
-                Write-Log -Level INFO -Message "[SANDBOX] $providerName applied"
-                return $result
-            }
-
-            $result = & $setStateCmd -Desired $desired
-            return $result
+            $inDesiredState = & $testStateCmd -Desired $desired
         }
         catch {
-            Write-Log -Level ERROR -Message "$providerName set failed: $_"
-            return @{ Status = "Error"; Message = "Set failed" }
+            Write-Log -Level ERROR -Message "$providerName test failed: $_"
+            return @{ Status = "Error"; Message = "Test failed" }
         }
+
+        if ($inDesiredState) {
+            Write-Log -Level OK -Message "$providerName already in desired state"
+            return @{ Status = "AlreadyInDesiredState" }
+        }
+
+        if ($mode -eq "DryRun") {
+            Write-Log -Level INFO -Message "DryRun: $providerName would apply changes"
+            return @{
+                Status  = "DryRun"
+                Pending = $true
+            }
+        }
+
+        if ($PSCmdlet.ShouldProcess($providerName, "Apply configuration")) {
+
+            try {
+                if ($mode -eq "Mock" -and $sandboxCmd) {
+                    $result = & $sandboxCmd -Desired $desired
+                    Write-Log -Level INFO -Message "[SANDBOX] $providerName applied"
+                    return $result
+                }
+
+                $result = & $setStateCmd -Desired $desired
+                return $result
+            }
+            catch {
+                Write-Log -Level ERROR -Message "$providerName set failed: $_"
+                return @{ Status = "Error"; Message = "Set failed" }
+            }
+        }
+    }
+    finally {
+        # Remove module after execution to free resources (bypass WhatIf - cleanup must always happen)
+        Remove-Module -Name $providerName -Force -ErrorAction SilentlyContinue -WhatIf:$false
     }
 }
 
@@ -511,7 +517,7 @@ function Invoke-Managers {
 
         $results[$name] = Invoke-Manager `
             -Provider $provider `
-    
+            -Config $Config
     }
 
     return $results
@@ -558,20 +564,28 @@ function Invoke-TriggerProvider {
         return @{ Status = "Error"; Message = "Failed to load trigger" }
     }
 
-    $cmd = $module.ExportedCommands["Invoke-Trigger"]
+    try {
+        $cmd = $module.ExportedCommands["Invoke-Trigger"]
 
-    if (-not $cmd) {
-        Write-Log -Level "ERROR" -Message "Trigger $name missing invoke function"
-        return @{ Status = "Error"; Message = "Missing trigger function" }
-    }
-
-    if ($PSCmdlet.ShouldProcess($name, "Execute trigger")) {
-        try {
-            return & $cmd -Option $Value
+        if (-not $cmd) {
+            Write-Log -Level "ERROR" -Message "Trigger $name missing invoke function"
+            return @{ Status = "Error"; Message = "Missing trigger function" }
         }
-        catch {
-            Write-Log -Level "ERROR" -Message "Trigger $name failed: $_"
-            return @{ Status = "Error"; Message = $_.Exception.Message }
+
+        if ($PSCmdlet.ShouldProcess($name, "Execute trigger")) {
+            try {
+                return & $cmd -Option $Value
+            }
+            catch {
+                Write-Log -Level "ERROR" -Message "Trigger $name failed: $_"
+                return @{ Status = "Error"; Message = $_.Exception.Message }
+            }
+        }
+    }
+    finally {
+        # Remove module after execution to free resources (bypass WhatIf - cleanup must always happen)
+        if ($module) {
+            Remove-Module -ModuleInfo $module -Force -ErrorAction SilentlyContinue -WhatIf:$false
         }
     }
 }
@@ -586,7 +600,7 @@ function Invoke-Triggers {
 
     $triggers = Resolve-Triggers `
         -Config $Config `
-        -UserTrigger $Triggers `
+        -UserTriggers $Triggers `
         -ConfigPath $ConfigPath
 
     Write-Debug "Triggers: $($triggers | Out-String)"
@@ -635,7 +649,7 @@ function Invoke-WinSpec {
         Write-Log -Level "ERROR" -Message "Specification validation failed"
         return @{ Success = $false }
     }
-    if ($Checkpoint -and -not $DryRun) {
+    if ($Checkpoint) {
         $checkpoint = New-Checkpoint -Name "WinSpec-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
         if (-not $checkpoint.Success) {
             Write-Log -Level "WARN" -Message "Checkpoint creation failed"
@@ -643,9 +657,9 @@ function Invoke-WinSpec {
     }
 
     Write-LogSection -Name "Providers"
-    $results = Invoke-Managers -Config $Spec -Providers $Providers -WhatIf:$DryRun
+    $results = Invoke-Managers -Config $Spec -Providers $Providers
     Write-LogSection -Name "Triggers"
-    $results["Triggers"] = Invoke-Triggers -Config $Spec -ConfigPath $ConfigPath -Trigger $Triggers -WhatIf:$DryRun
+    $results["Triggers"] = Invoke-Triggers -Config $Spec -ConfigPath $ConfigPath -Triggers $Triggers
 
     foreach ($provider in $results.Keys) {
         $result = $results[$provider]
@@ -670,6 +684,13 @@ function Invoke-WinSpec {
 # DIFF OUTPUT FORMATTING
 # =============================================================================
 
+function ConvertTo-DisplayValue {
+    param($Value)
+    if ($null -eq $Value) { return '(null)' }
+    if ($Value -is [bool]) { return $Value.ToString().ToLower() }
+    return $Value.ToString()
+}
+
 function Format-DiffOutput {
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)][hashtable]$Differences)
@@ -678,30 +699,33 @@ function Format-DiffOutput {
     $output += "`n=== STATE DIFFERENCES ===`n"
     
     # Added
-    if ($Differences.Added.Count -gt 0) {
+    $addedItems = if ($Differences.Added) { $Differences.Added } else { @() }
+    if ($addedItems.Count -gt 0) {
         $output += "`n[+] ADDED (in config, not in system):"
-        foreach ($item in $Differences.Added) {
+        foreach ($item in $addedItems) {
             $output += "    $($item.Path)"
-            $output += "       Value: $(ConvertTo-DisplayValue $item.DesiredValue)"
+            $output += "       Value: $(ConvertTo-DisplayValue $item.ConfigValue)"
         }
     }
     
     # Removed
-    if ($Differences.Removed.Count -gt 0) {
+    $removedItems = if ($Differences.Removed) { $Differences.Removed } else { @() }
+    if ($removedItems.Count -gt 0) {
         $output += "`n[-] REMOVED (in system, not in config):"
-        foreach ($item in $Differences.Removed) {
+        foreach ($item in $removedItems) {
             $output += "    $($item.Path)"
-            $output += "       Current: $(ConvertTo-DisplayValue $item.CurrentValue)"
+            $output += "       Current: $(ConvertTo-DisplayValue $item.SystemValue)"
         }
     }
     
     # Changed
-    if ($Differences.Changed.Count -gt 0) {
+    $changedItems = if ($Differences.Changed) { $Differences.Changed } else { @() }
+    if ($changedItems.Count -gt 0) {
         $output += "`n[~] CHANGED (different values):"
-        foreach ($item in $Differences.Changed) {
+        foreach ($item in $changedItems) {
             $output += "    $($item.Path)"
-            $output += "       System:  $(ConvertTo-DisplayValue $item.CurrentValue)"
-            $output += "       Config:  $(ConvertTo-DisplayValue $item.DesiredValue)"
+            $output += "       System:  $(ConvertTo-DisplayValue $item.SystemValue)"
+            $output += "       Config:  $(ConvertTo-DisplayValue $item.ConfigValue)"
         }
     }
     
@@ -710,9 +734,9 @@ function Format-DiffOutput {
         $output += "`n[=] EQUAL (matched): $equalCount items"
     }
     
-    $totalChanges = $Differences.Added.Count + $Differences.Removed.Count + $Differences.Changed.Count
+    $totalChanges = $addedItems.Count + $removedItems.Count + $changedItems.Count
     $output += "`n---"
-    $output += "Summary: $($Differences.Added.Count) added, $($Differences.Removed.Count) removed, $($Differences.Changed.Count) changed, $equalCount equal"
+    $output += "Summary: $($addedItems.Count) added, $($removedItems.Count) removed, $($changedItems.Count) changed, $equalCount equal"
     $output += "`nTotal differences: $totalChanges"
     
     return $output -join "`n"
@@ -736,14 +760,14 @@ Export-ModuleMember -Function @(
     "Invoke-WinSpec"
     "Invoke-Managers"
     "Invoke-Triggers"
+    "Invoke-TriggerProvider"
     # export state
     "Get-SystemState"
     "Export-ProviderState"
     # compare
     "Compare-ProviderState"
     "Compare-SystemState"
-    # merge
-    "Merge-ProviderState"
-    "Merge-SystemState"
+    # diff output
+    "ConvertTo-DisplayValue"
     "Format-DiffOutput"
 )
