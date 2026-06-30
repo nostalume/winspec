@@ -37,6 +37,12 @@ Describe "Activation Trigger" {
             $result | Should -Not -BeNullOrEmpty
             $result.Status | Should -Be "DryRun"
         }
+
+        It "Should block live remote execution without explicit confirmation" {
+            $result = Invoke-ActTrigger
+            $result | Should -Not -BeNullOrEmpty
+            $result.Status | Should -Be "Blocked"
+        }
     }
 }
 
@@ -58,6 +64,12 @@ Describe "Debloat Trigger" {
             $result | Should -Not -BeNullOrEmpty
             $result.Status | Should -Be "DryRun"
         }
+
+        It "Should block live remote execution without explicit confirmation" {
+            $result = Invoke-DebTrigger
+            $result | Should -Not -BeNullOrEmpty
+            $result.Status | Should -Be "Blocked"
+        }
     }
 }
 
@@ -78,6 +90,12 @@ Describe "Office Trigger" {
             $result = Invoke-OffTrigger -Option "C:\Test" -WhatIf
             $result | Should -Not -BeNullOrEmpty
             $result.Status | Should -Be "DryRun"
+        }
+
+        It "Should block live remote download without explicit confirmation" {
+            $result = Invoke-OffTrigger -Option @{ Path = "C:\Test" }
+            $result | Should -Not -BeNullOrEmpty
+            $result.Status | Should -Be "Blocked"
         }
     }
 }
