@@ -34,23 +34,6 @@
         }
     }
     
-    # Scoop packages
-    Scoop = @{
-        Packages = @(
-            "git",
-            "nodejs",
-            "python"
-        )
-    }
-    
-    # Winget packages
-    Winget = @{
-        Packages = @(
-            "Microsoft.VisualStudioCode",
-            "Microsoft.PowerToys"
-        )
-    }
-    
     # Triggers
     Triggers = @(
         @{

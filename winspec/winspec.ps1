@@ -172,7 +172,7 @@ OPTIONS:
 
 EXAMPLES:
     winspec status
-    winspec status -Providers Registry,Scoop
+    winspec status -Providers Registry,Feature
 
 "@
             }
@@ -213,7 +213,7 @@ USAGE:
 
 DESCRIPTION:
     Lists all available providers:
-    - Declarative (idempotent): Registry, Scoop, Winget, Service, Feature
+    - Declarative (idempotent): Registry, Service, Feature
     - Trigger (non-idempotent): Activation, Debloat, Office
 
 OPTIONS:
@@ -274,7 +274,7 @@ OPTIONS:
     winspec pull
 
     # Pull specific providers
-    winspec pull -Providers Registry,Scoop
+    winspec pull -Providers Registry,Feature
 
     # Pull to specific output file
     winspec pull -Output config.ps1

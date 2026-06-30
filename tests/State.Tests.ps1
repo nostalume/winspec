@@ -195,6 +195,28 @@ Describe "State Export" {
     }
 }
 
+Describe "Provider Discovery" {
+    Context "Get-Managers" {
+        It "Should not discover retired Scoop or Winget package managers" {
+            InModuleScope state {
+                $managerNames = @(Get-Managers | ForEach-Object { $_.Name })
+
+                $managerNames | Should -Not -Contain "Scoop"
+                $managerNames | Should -Not -Contain "Winget"
+            }
+        }
+    }
+}
+
+Describe "Utility Surface" {
+    Context "Retired package helpers" {
+        It "Should not export package merge helpers after package managers are retired" {
+            Get-Command Merge-PackageState -ErrorAction SilentlyContinue | Should -BeNullOrEmpty
+            Get-Command Merge-SourceCollection -ErrorAction SilentlyContinue | Should -BeNullOrEmpty
+        }
+    }
+}
+
 Describe "State Validation" {
     Context "Test-SpecSchema" {
         It "Should return true for valid spec with known keys" {
@@ -215,6 +237,50 @@ Describe "State Validation" {
             
             $result = Test-SpecSchema -Spec $spec
             $result | Should -BeFalse
+        }
+
+        It "Should reject retired package-manager sections" {
+            $spec = @{
+                Scoop  = @{ Installed = @("git") }
+                Winget = @{ Installed = @("Git.Git") }
+            }
+
+            $result = Test-SpecSchema -Spec $spec
+            $result | Should -BeFalse
+        }
+
+        It "Should reject unknown Registry properties" {
+            $spec = @{
+                Registry = @{
+                    Explorer = @{ DefinitelyNotASetting = $true }
+                }
+            }
+
+            $result = Test-SpecSchema -Spec $spec
+            $result | Should -BeFalse
+        }
+
+        It "Should reject invalid mapped Registry values" {
+            $spec = @{
+                Registry = @{
+                    Theme = @{ AppTheme = "blue" }
+                }
+            }
+
+            $result = Test-SpecSchema -Spec $spec
+            $result | Should -BeFalse
+        }
+
+        It "Should accept expanded Taskbar and Start registry categories" {
+            $spec = @{
+                Registry = @{
+                    Taskbar = @{ Alignment = "left"; ShowTaskViewButton = $false }
+                    Start   = @{ ShowRecommendations = $false; ShowRecentlyAddedApps = $true }
+                }
+            }
+
+            $result = Test-SpecSchema -Spec $spec
+            $result | Should -BeTrue
         }
     }
 }

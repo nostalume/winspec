@@ -3,7 +3,7 @@
 
 # Import dependent modules
 $ModuleRoot = $PSScriptRoot
-Import-Module (Join-Path $ModuleRoot "logging.psm1") -ErrorAction Stop -Global
+Import-Module (Join-Path $ModuleRoot "logging.psm1") -ErrorAction Stop
 Import-Module (Join-Path $ModuleRoot "utils.psm1") -ErrorAction Stop
 Import-Module (Join-Path $ModuleRoot "checkpoint.psm1") -ErrorAction Stop
 Import-Module (Join-Path $ModuleRoot "schema.psm1") -ErrorAction Stop
@@ -207,7 +207,7 @@ function Resolve-Triggers {
 function Resolve-ProviderList {
     param([string[]]$Providers = @())
     
-    # Registry, Feature, Service, Winget, Scoop
+    # Registry, Feature, Service
     $defaultProviders = @("Registry", "Feature")
     
     if ($providers -and $Providers.Count -gt 0) { return $Providers }

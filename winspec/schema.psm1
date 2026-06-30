@@ -16,8 +16,6 @@ $Script:SpecSchema = @{
     Import      = @{ Type = "array"; Required = $false }
     Providers   = @{ Type = "array"; Required = $false }
     Registry    = @{ Type = "hashtable"; Required = $false }
-    Scoop       = @{ Type = "hashtable"; Required = $false }
-    Winget      = @{ Type = "hashtable"; Required = $false }
     Service     = @{ Type = "hashtable"; Required = $false }
     Feature     = @{ Type = "hashtable"; Required = $false }
     Trigger     = @{ Type = "array"; Required = $false }
@@ -44,31 +42,57 @@ function Test-SpecSchema {
         }
     }
     
-    # Validate Registry keys are known categories
+    # Validate Registry categories, properties, and mapped values
     if ($Spec.Registry) {
         $registryMaps = Get-RegistryMaps
         $validCategories = $registryMaps.Keys
         foreach ($category in $Spec.Registry.Keys) {
             if ($category -notin $validCategories) {
                 $errors += "Unknown Registry category: '$category'. Valid: $($validCategories -join ', ')"
+                continue
+            }
+
+            $categorySpec = $Spec.Registry[$category]
+            if ($categorySpec -isnot [hashtable]) {
+                $errors += "Registry category '$category' must be a hashtable"
+                continue
+            }
+
+            $categoryMap = $registryMaps[$category]
+            $validProperties = $categoryMap.Properties.Keys
+            foreach ($property in $categorySpec.Keys) {
+                if ($property -notin $validProperties) {
+                    $errors += "Unknown Registry property: '$category.$property'. Valid: $($validProperties -join ', ')"
+                    continue
+                }
+
+                $propertyMap = $categoryMap.Properties[$property]
+                $value = $categorySpec[$property]
+
+                if ($propertyMap.AllowedValues) {
+                    $matched = $false
+                    foreach ($allowed in $propertyMap.AllowedValues) {
+                        if ($allowed -eq $value) {
+                            $matched = $true
+                            break
+                        }
+                    }
+                    if (-not $matched) {
+                        $errors += "Registry property '$category.$property' has invalid value '$value'. Valid: $($propertyMap.AllowedValues -join ', ')"
+                    }
+                    continue
+                }
+
+                if ($propertyMap.Type -eq "DWord" -and $value -isnot [int]) {
+                    $errors += "Registry property '$category.$property' must be an integer for DWord values"
+                }
+                elseif ($propertyMap.Type -eq "String" -and $value -isnot [string]) {
+                    $errors += "Registry property '$category.$property' must be a string"
+                }
             }
         }
     }
-    
-    # Validate Package/Scoop structure
-    if ($Spec.Scoop) {
-        if ($Spec.Scoop.Installed -and -not ($Spec.Scoop.Installed -is [array])) {
-            $errors += "Scoop.Installed must be an array"
-        }
-    }
-    
-    # Validate Winget structure
-    if ($Spec.Winget) {
-        if ($Spec.Winget.Installed -and -not ($Spec.Winget.Installed -is [array])) {
-            $errors += "Winget.Installed must be an array"
-        }
-    }
-    
+
     # Validate Feature structure
     if ($Spec.Feature) {
         foreach ($feature in $Spec.Feature.Keys) {

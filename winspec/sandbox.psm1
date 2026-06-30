@@ -14,8 +14,6 @@ $Script:HistoryDir = Join-Path $Script:SandboxRoot "history"
 $Script:Sandbox = Join-Path $Script:SandboxRoot "sandbox.json"
 
 $Script:Providers = @(
-    "Scoop",
-    "Winget",
     "Registry",
     "Service",
     "Feature"
@@ -49,17 +47,6 @@ function Initialize-SandboxDirectory {
 
 function New-SandboxState {
     @{
-        Scoop    = @{
-            apps    = @()
-            buckets = @(
-                @{ name = "main"; source = "https://github.com/ScoopInstaller/Main" }
-            )
-        }
-
-        Winget   = @{
-            packages = @()
-        }
-
         Registry = @{
             Explorer  = @{
                 ShowHidden  = $false
