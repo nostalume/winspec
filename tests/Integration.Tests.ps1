@@ -67,8 +67,7 @@ Describe "State Management" {
         It "Should return a hashtable with Added/Removed/Changed/Equal keys" {
             InModuleScope state {
                 Mock Get-Managers { return @() }
-                Mock Write-Log { }       # suppress logging noise inside module
-                
+
                 $spec    = @{ Registry = @{ Explorer = @{ ShowHidden = $true } } }
                 $against = @{ Registry = @{ Explorer = @{ ShowHidden = $false } } }
                 
@@ -81,8 +80,7 @@ Describe "State Management" {
         It "Should return result for empty spec" {
             InModuleScope state {
                 Mock Get-Managers { return @() }
-                Mock Write-Log { }
-                
+
                 $result = Compare-SystemState -Spec @{} -Against @{}
                 $result | Should -Not -BeNullOrEmpty
             }
@@ -154,9 +152,6 @@ Describe "Provider Execution" {
             }
             
             InModuleScope state {
-                Mock Write-Log { }
-                Mock Write-LogSection { }
-                
                 $spec = @{
                     Registry = @{
                         Explorer = @{ ShowHidden = $true }
@@ -202,9 +197,8 @@ Describe "Configuration Loading" {
 Describe "Logging" {
     Context "Write-Log" {
         It "Should write log messages without error" {
-            InModuleScope logging {
-                { Write-Log -Level "INFO" -Message "Test message" } | Should -Not -Throw
-            }
+            Import-Module (Join-Path $PSScriptRoot ".." "winspec" "logging.psm1") -Force
+            { Write-Log -Level "INFO" -Message "Test message" } | Should -Not -Throw
         }
     }
 }
