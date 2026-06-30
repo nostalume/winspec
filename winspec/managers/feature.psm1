@@ -41,9 +41,10 @@ function Test-FeatureState {
         
         if ($null -eq $currentState) {
             Write-Log -Level "WARN" -Message "Feature not found: $featureName"
+            $allInDesiredState = $false
             continue
         }
-        
+
         $isDesired = Test-FeatureInDesiredState -DesiredState $desiredState -CurrentState $currentState
         if (-not $isDesired) {
             $allInDesiredState = $false
@@ -289,6 +290,16 @@ function Invoke-FeatureSandbox {
     return $results
 }
 
+function Invoke-FeatureSandboxApply {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [hashtable]$Desired
+    )
+
+    return Invoke-FeatureSandbox -Desired $Desired
+}
+
 Export-ModuleMember -Function @(
     "Get-ProviderInfo"
     "Get-FeatureState"
@@ -298,4 +309,5 @@ Export-ModuleMember -Function @(
     "Export-FeatureState"
     "Compare-FeatureState"
     "Invoke-FeatureSandbox"
+    "Invoke-FeatureSandboxApply"
 )

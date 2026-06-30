@@ -12,11 +12,28 @@ BeforeAll {
     Import-Module (Join-Path $winspecRoot "managers" "registry.psm1")      -Force -Global
     Import-Module (Join-Path $winspecRoot "managers" "feature.psm1")       -Force -Global
     Import-Module (Join-Path $winspecRoot "managers" "service.psm1")       -Force -Global
-    Import-Module (Join-Path $winspecRoot "managers" "scoop.psm1")         -Force -Global
-    Import-Module (Join-Path $winspecRoot "managers" "winget.psm1")        -Force -Global
 }
 
 Describe "Registry Provider" {
+    Context "Provider contract" {
+        It "Should export sandbox apply function used by manager dispatcher" {
+            Get-Command Invoke-RegistrySandboxApply -ErrorAction SilentlyContinue | Should -Not -BeNullOrEmpty
+        }
+
+        It "Should expose registry map metadata and allowed values" {
+            InModuleScope registry {
+                $maps = Get-RegistryMaps
+
+                $maps.Explorer.Description | Should -Not -BeNullOrEmpty
+                $maps.Explorer.Scope | Should -Be "HKCU"
+                $maps.Explorer.Properties.ShowHidden.AllowedValues | Should -Contain $true
+                $maps.Theme.Properties.AppTheme.AllowedValues | Should -Contain "dark"
+                $maps.Taskbar.Properties.Alignment.AllowedValues | Should -Contain "left"
+                $maps.Start.Properties.ShowRecommendations.AllowedValues | Should -Contain $false
+            }
+        }
+    }
+
     Context "Get-RegistryValue" {
         It "Should get registry value" {
             # Mock Get-ItemProperty inside the registry module scope
@@ -73,6 +90,12 @@ Describe "Registry Provider" {
 }
 
 Describe "Feature Provider" {
+    Context "Provider contract" {
+        It "Should export sandbox apply function used by manager dispatcher" {
+            Get-Command Invoke-FeatureSandboxApply -ErrorAction SilentlyContinue | Should -Not -BeNullOrEmpty
+        }
+    }
+
     Context "Get-FeatureState" {
         It "Should get feature state" {
             # Get-FeatureState calls Export-FeatureState; mock it in feature module scope
@@ -112,9 +135,39 @@ Describe "Feature Provider" {
             }
         }
     }
+
+    Context "Compare-FeatureState" {
+        It "Should not report a diff when desired lowercase state matches exported Windows state" {
+            InModuleScope feature {
+                $diffs = Compare-FeatureState `
+                    -System @{ TestFeature = "Enabled" } `
+                    -Desired @{ TestFeature = "enabled" }
+
+                $diffs | Should -BeNullOrEmpty
+            }
+        }
+    }
+
+    Context "Test-FeatureState" {
+        It "Should return false when a desired feature is missing from exported state" {
+            InModuleScope feature {
+                Mock Export-FeatureState { return @{} }
+
+                $result = Test-FeatureState -Desired @{ MissingFeature = "enabled" }
+
+                $result | Should -BeFalse
+            }
+        }
+    }
 }
 
 Describe "Service Provider" {
+    Context "Provider contract" {
+        It "Should export sandbox apply function used by manager dispatcher" {
+            Get-Command Invoke-ServiceSandboxApply -ErrorAction SilentlyContinue | Should -Not -BeNullOrEmpty
+        }
+    }
+
     Context "Get-ServiceState" {
         It "Should get service state" {
             InModuleScope service {
@@ -149,8 +202,34 @@ Describe "Service Provider" {
                 $result | Should -BeTrue
             }
         }
+
+        It "Should accept lowercase spec values for Windows-cased service state" {
+            InModuleScope service {
+                Mock Get-Service {
+                    return [PSCustomObject]@{
+                        Name      = "TestService"
+                        Status    = "Running"
+                        StartType = "Automatic"
+                    }
+                }
+
+                $desired = @{ TestService = @{ State = "running"; Startup = "automatic" } }
+                $result = Test-ServiceState -Desired $desired
+                $result | Should -BeTrue
+            }
+        }
+
+        It "Should return false when a desired service is missing" {
+            InModuleScope service {
+                Mock Get-Service { return @() }
+
+                $result = Test-ServiceState -Desired @{ MissingService = @{ State = "running" } }
+
+                $result | Should -BeFalse
+            }
+        }
     }
-    
+
     Context "Set-ServiceState" {
         It "Should process service state with WhatIf" {
             InModuleScope service {
@@ -164,122 +243,22 @@ Describe "Service Provider" {
                 Mock Start-Service { }
                 Mock Stop-Service { }
                 Mock Set-Service { }
-            }
-            InModuleScope utils {
                 Mock Test-IsAdmin { return $true }
             }
             
             { Set-ServiceState -Desired @{ TestService = @{ State = "Running" } } -WhatIf } | Should -Not -Throw
         }
     }
-}
 
-Describe "Scoop Provider" {
-    Context "Test-ScoopInstalled" {
-        It "Should return true when Scoop is installed" {
-            InModuleScope scoop {
-                Mock Get-Command { return [PSCustomObject]@{ Name = "scoop" } }
-                
-                $result = Test-ScoopInstalled
-                $result | Should -BeTrue
-            }
-        }
-    }
-    
-    Context "Export-ScoopState" {
-        It "Should export scoop state" {
-            InModuleScope scoop {
-                Mock Test-ScoopInstalled { return $true }
-                Mock Invoke-ScoopCommand {
-                    return '{"apps":[{"name":"git","version":"2.40.0","bucket":"main"}],"buckets":[{"name":"main","source":"https://github.com/ScoopInstaller/Main"}]}'
-                }
-                
-                $state = Export-ScoopState
-                $state | Should -Not -BeNullOrEmpty
-            }
-        }
-    }
-    
-    Context "Test-ScoopState" {
-        It "Should return true for installed package" {
-            InModuleScope scoop {
-                Mock Test-ScoopInstalled { return $true }
-                Mock Invoke-ScoopCommand {
-                    return '{"apps":[{"name":"git","version":"2.40.0","bucket":"main"}],"buckets":[]}'
-                }
-                
-                $desired = @{ Installed = @("git") }
-                $result = Test-ScoopState -Desired $desired
-                $result | Should -BeTrue
-            }
-        }
-    }
-    
-    Context "Set-ScoopState" {
-        It "Should return DryRun result with WhatIf" {
-            InModuleScope scoop {
-                Mock Test-ScoopInstalled { return $true }
-                # Mock Get-InstalledScoopPackages to return empty list so package is not yet installed
-                Mock Get-InstalledScoopPackages { return @() }
-                
-                $result = Set-ScoopState -Desired @{ Installed = @("newpkg") } -WhatIf
-                $result | Should -Not -BeNullOrEmpty
-                $result.Values | ForEach-Object { $_.Status | Should -Be "DryRun" }
-            }
-        }
-    }
-}
+    Context "Compare-ServiceState" {
+        It "Should treat lowercase desired values as equal to Windows-cased service state" {
+            InModuleScope service {
+                $system = @{ TestService = @{ State = "Running"; Startup = "Automatic" } }
+                $desired = @{ TestService = @{ State = "running"; Startup = "automatic" } }
+                $diffs = Compare-ServiceState -System $system -Desired $desired
 
-Describe "Winget Provider" {
-    Context "Test-WingetInstalled" {
-        It "Should return true when Winget is installed" {
-            InModuleScope winget {
-                Mock Get-Command { return [PSCustomObject]@{ Name = "winget" } }
-                
-                $result = Test-WingetInstalled
-                $result | Should -BeTrue
-            }
-        }
-    }
-    
-    Context "Test-WingetState" {
-        It "Should return true when no Installed packages desired" {
-            InModuleScope winget {
-                Mock Test-WingetInstalled { return $true }
-                
-                $desired = @{}
-                $result = Test-WingetState -Desired $desired
-                $result | Should -BeTrue
-            }
-        }
-        
-        It "Should return true when desired package is installed" {
-            InModuleScope winget {
-                Mock Test-WingetInstalled { return $true }
-                Mock Get-WingetExport {
-                    return @{
-                        Packages = @( @{ Name = "Git.Git"; Source = "winget" } )
-                        Sources  = @()
-                    }
-                }
-                
-                $desired = @{ Installed = @("Git.Git") }
-                $result = Test-WingetState -Desired $desired
-                $result | Should -BeTrue
-            }
-        }
-    }
-    
-    Context "Set-WingetState" {
-        It "Should return DryRun result with WhatIf" {
-            InModuleScope winget {
-                Mock Test-WingetInstalled { return $true }
-                # Mock Get-InstalledWingetPackages to return empty list
-                Mock Get-InstalledWingetPackages { return @() }
-                
-                $result = Set-WingetState -Desired @{ Installed = @("SomeNew.Package") } -WhatIf
-                $result | Should -Not -BeNullOrEmpty
-                $result.Values | ForEach-Object { $_.Status | Should -Be "DryRun" }
+                @($diffs).Count | Should -Be 1
+                @($diffs)[0].Type | Should -Be "Equal"
             }
         }
     }

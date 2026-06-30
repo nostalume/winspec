@@ -78,6 +78,7 @@ function Test-RegistryState {
     foreach ($category in $Desired.Keys) {
         if (-not $registryMap.ContainsKey($category)) {
             Write-Log -Level "WARN" -Message "Unknown registry category: $category"
+            $allInDesiredState = $false
             continue
         }
 
@@ -85,10 +86,18 @@ function Test-RegistryState {
         foreach ($propName in $Desired[$category].Keys) {
             if (-not $catConfig.Properties.ContainsKey($propName)) {
                 Write-Log -Level "WARN" -Message "Unknown property: $propName in $category"
+                $allInDesiredState = $false
                 continue
             }
 
             $propConfig = $catConfig.Properties[$propName]
+            $desiredValue = $Desired[$category][$propName]
+            if ($propConfig.Map -and -not $propConfig.Map.ContainsKey($desiredValue)) {
+                Write-Log -Level "WARN" -Message "Invalid value for $category.$($propName): $desiredValue"
+                $allInDesiredState = $false
+                continue
+            }
+
             $currentValue = Get-RegistryValue -Path $catConfig.Path -Property $propConfig.Name -Default $propConfig.Default
             if ($propConfig.Map) {
                 $currentState = Get-RegistryStateFromMap -StateMap $propConfig.Map -RegistryValue $currentValue
@@ -96,7 +105,7 @@ function Test-RegistryState {
             else {
                 $currentState = $currentValue
             }
-            if ($currentState -ne $Desired[$category][$propName]) {
+            if ($currentState -ne $desiredValue) {
                 $allInDesiredState = $false
             }
         }
@@ -137,6 +146,11 @@ function Set-RegistryState {
             $currentRaw = Get-RegistryValue -Path $catConfig.Path -Property $propConfig.Name -Default $propConfig.Default
 
             if ($propConfig.Map) {
+                if (-not $propConfig.Map.ContainsKey($desiredValue)) {
+                    Write-Log -Level "WARN" -Message "Invalid value for $category.$($propName): $desiredValue"
+                    $categoryResults[$propName] = @{ Status = "Error"; Message = "Invalid value" }
+                    continue
+                }
                 $currentState = Get-RegistryStateFromMap -StateMap $propConfig.Map -RegistryValue $currentRaw
                 $valueToSet = $propConfig.Map[$desiredValue]
             }
@@ -336,6 +350,16 @@ function Invoke-RegistrySandbox {
     return $results
 }
 
+function Invoke-RegistrySandboxApply {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [hashtable]$Desired
+    )
+
+    return Invoke-RegistrySandbox -Desired $Desired
+}
+
 Export-ModuleMember -Function @(
     "Get-ProviderInfo"
     "Get-RegistryValue"
@@ -347,4 +371,5 @@ Export-ModuleMember -Function @(
     "Export-RegistryState"
     "Compare-RegistryState"
     "Invoke-RegistrySandbox"
+    "Invoke-RegistrySandboxApply"
 )

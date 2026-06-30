@@ -85,7 +85,7 @@ function Test-ServiceState {
 
         if (-not $current) {
             Write-Log -Level WARN -Message "Service not found: $name"
-            continue
+            return $false
         }
 
         $target = $Desired[$name]
@@ -232,57 +232,57 @@ function Compare-ServiceState {
         [hashtable]$Desired
     )
 
-    $diffs = @()
+    $diffs = [System.Collections.ArrayList]::new()
 
     foreach ($name in $Desired.Keys) {
         $path = "Service.$name"
-        $system = $System[$name]
-        $config = $Desired[$name]
+        $systemConfig = $System[$name]
+        $desiredConfig = $Desired[$name]
 
-        if (-not $system) {
-            $diffs += @{
+        if (-not $systemConfig) {
+            [void]$diffs.Add([pscustomobject]@{
                 Type        = "Added"
                 Path        = $path
                 SystemValue = $null
-                ConfigValue = $config
-            }
+                ConfigValue = $desiredConfig
+            })
 
             continue
         }
 
-        if ($system.State -eq $config.State -and
-            $system.Startup -eq $config.Startup) {
+        if ($systemConfig.State -eq $desiredConfig.State -and
+            $systemConfig.Startup -eq $desiredConfig.Startup) {
 
-            $diffs += @{
+            [void]$diffs.Add([pscustomobject]@{
                 Type        = "Equal"
                 Path        = $path
-                SystemValue = $system
-                ConfigValue = $config
-            }
+                SystemValue = $systemConfig
+                ConfigValue = $desiredConfig
+            })
 
             continue
         }
 
-        $diffs += @{
+        [void]$diffs.Add([pscustomobject]@{
             Type        = "Changed"
             Path        = $path
-            SystemValue = $system
-            ConfigValue = $config
-        }
+            SystemValue = $systemConfig
+            ConfigValue = $desiredConfig
+        })
     }
 
     foreach ($name in $System.Keys) {
         if ($Desired.ContainsKey($name)) { continue }
 
-        $diffs += @{
+        [void]$diffs.Add([pscustomobject]@{
             Type        = "Removed"
             Path        = "Service.$name"
             SystemValue = $System[$name]
             ConfigValue = $null
-        }
+        })
     }
 
-    return $diffs
+    return $diffs.ToArray()
 }
 
 function Invoke-ServiceSandbox {
@@ -336,6 +336,16 @@ Simulates Windows service configuration changes inside sandbox.
     return $results
 }
 
+function Invoke-ServiceSandboxApply {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$Desired
+    )
+
+    return Invoke-ServiceSandbox -Desired $Desired
+}
+
 Export-ModuleMember -Function @(
     "Get-ProviderInfo"
     "Get-ServiceState"
@@ -344,5 +354,6 @@ Export-ModuleMember -Function @(
     "Set-ServiceState"
     "Export-ServiceState"
     "Compare-ServiceState"
-    "Invoke-ServiceSandBox"
+    "Invoke-ServiceSandbox"
+    "Invoke-ServiceSandboxApply"
 )
