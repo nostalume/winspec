@@ -67,8 +67,6 @@ Tests for individual provider modules:
 - Registry provider
 - Feature provider
 - Service provider
-- Scoop provider
-- Winget provider
 
 ### Trigger Tests (`Trigger.Tests.ps1`)
 

@@ -56,7 +56,7 @@ WinSpec distinguishes between two types of providers:
 
 | Type | Location | Characteristics | Idempotent | Examples |
 |------|----------|-----------------|------------|----------|
-| **Declarative** | `managers/` | State-based, testable | Yes | Registry, Service, Feature, Package |
+| **Declarative** | `managers/` | State-based, testable | Yes | Registry, Service, Feature |
 | **Trigger** | `triggers/` | Action-based, fire-and-forget | No | Activation, Debloat, Office |
 
 **Declarative providers** let you specify *what state* you want. Running multiple times produces the same result - the engine tests current state, calculates diff, and applies only needed changes.
@@ -248,16 +248,6 @@ WinSpec is modular - you can use only the providers you need. Simply omit the pr
 ```
 
 ```powershell
-# Only configure Package - no Registry, Service, Feature, or Triggers
-@{
-    Name = "packages-only"
-    Package = @{
-        Installed = @("git", "neovim")
-    }
-}
-```
-
-```powershell
 # Only use Triggers - no declarative providers
 @{
     Name = "triggers-only"
@@ -269,8 +259,8 @@ WinSpec is modular - you can use only the providers you need. Simply omit the pr
 
 **When pulling with specific providers:**
 ```powershell
-# Pull only Registry and Package state (ignore Service, Feature)
-winspec pull -Providers Registry,Package -Output my-config.ps1
+# Pull only Registry and Feature state (ignore Service)
+winspec pull -Providers Registry,Feature -Output my-config.ps1
 ```
 
 ### Examples
@@ -330,7 +320,7 @@ Trigger providers download and execute remote scripts:
 - **Debloat**: Downloads from `https://debloat.raphi.re/`
 - **Office**: Downloads from Microsoft CDN
 
-These scripts require administrator privileges. Always review remote scripts before execution. Use `-DryRun` to preview actions without executing them.
+These scripts require administrator privileges. Live remote downloads/execution are blocked unless the trigger option is a hashtable with `ConfirmRemoteExecution = $true`. Always run with `-DryRun`/`-WhatIf` first and review remote scripts before explicitly confirming execution.
 
 ---
 
@@ -342,13 +332,11 @@ See [LICENSE-MIT](LICENSE-MIT) for details.
 
 ## Documentation
 
-- **[docs/design.md](docs/design.md)** - Architecture and design principles
-- **[docs/spec.md](docs/spec.md)** - Specification and provider development guide
-- **[docs/configuration.md](docs/configuration.md)** - Configuration guide
-- **[docs/contributing.md](docs/contributing.md)** - Contributing guide
-- **[docs/registry-reference.md](docs/registry-reference.md)** - Registry provider details
-- **[docs/service-reference.md](docs/service-reference.md)** - Service provider details
-- **[docs/feature-reference.md](docs/feature-reference.md)** - Feature provider details
+- **[docs/architecture.md](docs/architecture.md)** - Abstractions, concepts, and provider architecture
+- **[docs/api.md](docs/api.md)** - User-facing CLI, specification, and provider-extension API
+- **[docs/development.md](docs/development.md)** - Contributing, testing, CI, and release workflow
+- **[docs/AGENT.md](docs/AGENT.md)** - Toolchain, stack, and operating principles for coding agents
+- **[docs/reference.md](docs/reference.md)** - Ephemeral file layout, spec fields, provider schemas, and contracts
 
 ---
 
