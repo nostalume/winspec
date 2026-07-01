@@ -1,6 +1,6 @@
 # checkpoint.psm1 - Restore point management for WinSpec
 
-Import-Module (Join-Path $PSScriptRoot "logging.psm1") -Global
+Import-Module (Join-Path $PSScriptRoot "logging.psm1") -ErrorAction Stop
 
 function Test-SystemRestoreEnabled {
     [CmdletBinding()]
@@ -49,10 +49,14 @@ function New-Checkpoint {
     
     Write-Log -Level "INFO" -Message "Creating restore point: $Name"
     
-    # Ensure System Restore is enabled
-    if (-not (Enable-SystemRestore)) {
-        Write-Log -Level "WARN" -Message "Cannot create checkpoint without System Restore."
-        return $null
+    if (-not (Test-SystemRestoreEnabled)) {
+        Write-Log -Level "WARN" -Message "Cannot create checkpoint because System Restore is disabled."
+        return @{
+            Name    = $Name
+            Success = $false
+            Reason  = "SystemRestoreDisabled"
+            Message = "Enable System Restore before creating a checkpoint."
+        }
     }
     
     try {

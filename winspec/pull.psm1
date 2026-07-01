@@ -29,7 +29,9 @@ function Invoke-Pull {
         [switch]$Minimal,
 
         [switch]$NoCache,
-        
+
+        [switch]$DryRun,
+
         [switch]$Interactive,
 
         [string]$Name = "WinSpec Configuration",
@@ -90,13 +92,16 @@ function Invoke-Pull {
         $config = Invoke-PullMinimal $config
     }
 
-    if ($Output) {
+    if ($Output -and -not $DryRun) {
         if ($PSCmdlet.ShouldProcess($Output,"Save spec")) {
             $null = Save-Configuration `
                 -Config $config `
                 -Path $Output `
                 -Format $Format
         }
+    }
+    elseif ($Output -and $DryRun) {
+        Write-Log INFO "DryRun: would save spec to $Output"
     }
 
     return $config

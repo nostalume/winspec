@@ -12,6 +12,8 @@ BeforeAll {
     Import-Module (Join-Path $winspecRoot "state.psm1")    -Force -Global
     Import-Module (Join-Path $winspecRoot "diff.psm1")     -Force -Global
     Import-Module (Join-Path $winspecRoot "merge.psm1")    -Force -Global
+    Import-Module (Join-Path $winspecRoot "pull.psm1")     -Force -Global
+    Import-Module (Join-Path $winspecRoot "checkpoint.psm1") -Force -Global
     Import-Module (Join-Path $winspecRoot "managers" "registry.psm1") -Force -Global
     
     # Create a test config directory and spec file
@@ -189,6 +191,43 @@ Describe "Configuration Loading" {
                 
                 $spec | Should -Not -BeNullOrEmpty
                 $spec -is [hashtable] | Should -BeTrue
+            }
+        }
+    }
+}
+
+Describe "Command Safety" {
+    Context "Invoke-Pull" {
+        It "Should not write output when DryRun is set" {
+            $target = Join-Path $TestDrive "dryrun-output.ps1"
+
+            InModuleScope pull -Parameters @{ Target = $target } {
+                param($Target)
+
+                Mock Get-SystemState { @{ Registry = @{ Explorer = @{ ShowHidden = $true } } } }
+                Mock Save-Configuration { throw "Save-Configuration should not run during DryRun" }
+
+                $result = Invoke-Pull -Output $Target -Spec @{} -DryRun
+
+                $result.Registry.Explorer.ShowHidden | Should -BeTrue
+                Test-Path $Target | Should -BeFalse
+                Should -Invoke Save-Configuration -Times 0 -Exactly
+            }
+        }
+    }
+
+    Context "New-Checkpoint" {
+        It "Should not enable System Restore implicitly" {
+            InModuleScope checkpoint {
+                Mock Write-Log { }
+                Mock Test-SystemRestoreEnabled { $false }
+                Mock Enable-SystemRestore { throw "Enable-SystemRestore should not run from New-Checkpoint" }
+
+                $result = New-Checkpoint -Name "WinSpec-Test"
+
+                $result.Success | Should -BeFalse
+                $result.Reason | Should -Be "SystemRestoreDisabled"
+                Should -Invoke Enable-SystemRestore -Times 0 -Exactly
             }
         }
     }
