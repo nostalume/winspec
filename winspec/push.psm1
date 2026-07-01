@@ -43,7 +43,7 @@ function Invoke-Push {
 
     Write-LogHeader -Title "WinSpec Push"
 
-    Import-Module (Join-Path $PSScriptRoot "sandbox.psm1") -Force
+    Import-Module (Join-Path $PSScriptRoot "sandbox.psm1") -Global -ErrorAction Stop
 
     # Detect existing sandbox
     $sandboxAlreadyActive = Test-SandboxActive

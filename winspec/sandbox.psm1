@@ -6,7 +6,7 @@
 # ------------------------------------------------------------
 
 $ModuleRoot = $PSScriptRoot
-Import-Module (Join-Path $ModuleRoot "logging.psm1") -Force -Global
+Import-Module (Join-Path $ModuleRoot "logging.psm1") -Force
 
 $Script:SandboxRoot = Join-Path $env:USERPROFILE ".config\winspec\sandbox"
 $Script:SnapshotsDir = Join-Path $Script:SandboxRoot "snapshots"

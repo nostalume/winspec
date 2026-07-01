@@ -400,6 +400,66 @@ Result shape:
 }
 ```
 
+
+
+### Sandbox integration behavior
+
+`Invoke-Push` owns sandbox lifecycle for push execution:
+
+```text
+Invoke-Push -DryRun
+  -> Enter-Sandbox -Mode DryRun
+  -> Invoke-WinSpec
+  -> provider test/apply path reports DryRun
+  -> Exit-Sandbox -DiscardChanges
+```
+
+If a mock sandbox is already active, `Invoke-Push` reuses it instead of replacing it:
+
+```text
+Enter-Sandbox -Mode Mock
+Invoke-Push -Spec <spec>
+  -> Invoke-WinSpec
+  -> Invoke-Manager
+  -> module.ExportedCommands["Invoke-<Name>SandboxApply"]
+  -> Update-SandboxState / Update-SandboxChanges
+```
+
+The orchestrator resolves sandbox commands through the loaded sandbox module rather than a private stale import so provider modules and push orchestration share the same persisted sandbox context. Provider modules remain loaded after invocation; unloading a provider module during a push can also remove shared dependency commands such as logging or sandbox helpers that later providers/triggers still need.
+
+### Checkpoint and rollback behavior
+
+Checkpoint creation is explicit and privilege-gated:
+
+```text
+New-Checkpoint
+  -> Test-SystemRestoreEnabled
+  -> Test-IsAdmin
+  -> Checkpoint-Computer
+```
+
+Failure result shape:
+
+```powershell
+@{ Success = $false; Reason = "SystemRestoreDisabled" }
+@{ Success = $false; Reason = "RequiresAdministrator" }
+@{ Success = $false; Reason = "CheckpointFailed"; Error = "..." }
+```
+
+Rollback selects either an explicit sequence number or the newest restore point whose description starts with `WinSpec` when `-Last` is used. `Restore-Computer` is called only inside `ShouldProcess`; under `-WhatIf`, rollback returns a structured result and does not restore the machine.
+
+Rollback result shape:
+
+```powershell
+@{ Success = $true; SequenceNumber = 30; Description = "WinSpec-..." }
+@{ Success = $false; Reason = "SystemRestoreDisabled" }
+@{ Success = $false; Reason = "NoRestorePoints" }
+@{ Success = $false; Reason = "RollbackTargetRequired" }
+@{ Success = $false; Reason = "RestorePointNotFound" }
+@{ Success = $false; Reason = "WhatIf" }
+@{ Success = $false; Reason = "RestoreFailed"; Error = "..." }
+```
+
 ### Trigger flow
 
 ```text

@@ -54,14 +54,14 @@ A diff is a provider-level comparison between desired and observed state. Diff e
 
 Sandbox mode is a safety boundary for trying provider behavior without touching live state.
 
-- `DryRun` reports pending changes.
+- `DryRun` reports pending changes and discards the active sandbox context after a dry-run push.
 - `Mock` records simulated state changes and trigger executions.
 
-Providers can supply sandbox-specific apply functions, but the core execution layer owns sandbox detection and routing.
+Providers can supply sandbox-specific apply functions, but the core execution layer owns sandbox detection and routing. Sandbox state is file-backed so provider modules can hydrate the same context across module boundaries; integration tests must isolate the sandbox root under `TestDrive`.
 
 ### Checkpoint
 
-A checkpoint is a Windows System Restore point created before risky system changes when requested. Rollback restores a previous checkpoint by sequence number or the latest WinSpec checkpoint.
+A checkpoint is a Windows System Restore point created before risky system changes when requested. Checkpoint creation is explicit: WinSpec does not enable System Restore implicitly, and creating a restore point requires Administrator privileges. Rollback restores a previous checkpoint by sequence number or the latest WinSpec checkpoint, is guarded by `ShouldProcess`, and returns structured success/failure metadata rather than a bare boolean.
 
 ---
 

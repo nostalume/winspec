@@ -226,9 +226,11 @@ winspec sandbox -List
 winspec sandbox -Exit
 ```
 
-Sandbox mode lets providers simulate or report changes without modifying live state.
+Sandbox mode lets providers simulate or report changes without modifying live state. `DryRun` reports pending changes and discards its active sandbox context at the end of `push`; `Mock` records simulated provider changes in the sandbox context and can write sandbox history on exit.
 
-### `rollback`
+### `checkpoint` / `rollback`
+
+`winspec push -Checkpoint` creates a Windows System Restore point before applying a spec. Checkpoint creation does not enable System Restore implicitly and requires the current process to be elevated. If System Restore is disabled, checkpoint creation returns `Success = $false`, `Reason = "SystemRestoreDisabled"`; if the process is not elevated, it returns `Reason = "RequiresAdministrator"`.
 
 Restore a Windows System Restore checkpoint.
 
@@ -239,6 +241,8 @@ winspec rollback -Last
 # Roll back to a specific restore point sequence number
 winspec rollback -SequenceNumber 5
 ```
+
+Rollback is guarded by PowerShell `ShouldProcess`; `-WhatIf` does not call `Restore-Computer` and returns `Success = $false`, `Reason = "WhatIf"`. Other structured failure reasons include `SystemRestoreDisabled`, `NoRestorePoints`, `RollbackTargetRequired`, `RestorePointNotFound`, and `RestoreFailed`.
 
 ---
 

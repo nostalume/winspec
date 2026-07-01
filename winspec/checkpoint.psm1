@@ -1,6 +1,7 @@
 # checkpoint.psm1 - Restore point management for WinSpec
 
 Import-Module (Join-Path $PSScriptRoot "logging.psm1") -ErrorAction Stop
+Import-Module (Join-Path $PSScriptRoot "utils.psm1") -ErrorAction Stop
 
 function Test-SystemRestoreEnabled {
     [CmdletBinding()]
@@ -58,6 +59,16 @@ function New-Checkpoint {
             Message = "Enable System Restore before creating a checkpoint."
         }
     }
+
+    if (-not (Test-IsAdmin)) {
+        Write-Log -Level "ERROR" -Message "Administrator privileges are required to create a restore point."
+        return @{
+            Name    = $Name
+            Success = $false
+            Reason  = "RequiresAdministrator"
+            Message = "Run WinSpec as Administrator to create a checkpoint."
+        }
+    }
     
     try {
         Checkpoint-Computer -Description $Name -RestorePointType "MODIFY_SETTINGS" -ErrorAction Stop
@@ -73,9 +84,10 @@ function New-Checkpoint {
     catch {
         Write-Log -Level "ERROR" -Message "Failed to create restore point: $($_.Exception.Message)"
         return @{
-            Name      = $Name
-            Success   = $false
-            Error     = $_.Exception.Message
+            Name    = $Name
+            Success = $false
+            Reason  = "CheckpointFailed"
+            Error   = $_.Exception.Message
         }
     }
 }
@@ -120,14 +132,22 @@ function Invoke-Rollback {
     
     if (-not (Test-SystemRestoreEnabled)) {
         Write-Log -Level "ERROR" -Message "System Restore is not enabled. Cannot rollback."
-        return $false
+        return @{
+            Success = $false
+            Reason  = "SystemRestoreDisabled"
+            Message = "System Restore is not enabled. Cannot rollback."
+        }
     }
     
     $restorePoints = Get-ComputerRestorePoint -ErrorAction SilentlyContinue
     
     if (-not $restorePoints) {
         Write-Log -Level "ERROR" -Message "No restore points available for rollback."
-        return $false
+        return @{
+            Success = $false
+            Reason  = "NoRestorePoints"
+            Message = "No restore points available for rollback."
+        }
     }
     
     if ($Last) {
@@ -142,12 +162,20 @@ function Invoke-Rollback {
     }
     else {
         Write-Log -Level "ERROR" -Message "Specify -SequenceNumber or -Last for rollback target."
-        return $false
+        return @{
+            Success = $false
+            Reason  = "RollbackTargetRequired"
+            Message = "Specify -SequenceNumber or -Last for rollback target."
+        }
     }
     
     if (-not $target) {
         Write-Log -Level "ERROR" -Message "Target restore point not found."
-        return $false
+        return @{
+            Success = $false
+            Reason  = "RestorePointNotFound"
+            Message = "Target restore point not found."
+        }
     }
     
     Write-Log -Level "WARN" -Message "This will restore the system to: $($target.Description)"
@@ -157,15 +185,31 @@ function Invoke-Rollback {
         try {
             Restore-Computer -RestorePoint $target.SequenceNumber -ErrorAction Stop
             Write-Log -Level "APPLIED" -Message "System restore initiated. Restart required."
-            return $true
+            return @{
+                Success        = $true
+                SequenceNumber = $target.SequenceNumber
+                Description    = $target.Description
+                Message        = "System restore initiated. Restart required."
+            }
         }
         catch {
             Write-Log -Level "ERROR" -Message "Rollback failed: $($_.Exception.Message)"
-            return $false
+            return @{
+                Success        = $false
+                Reason         = "RestoreFailed"
+                SequenceNumber = $target.SequenceNumber
+                Description    = $target.Description
+                Error          = $_.Exception.Message
+            }
         }
     }
     
-    return $false
+    return @{
+        Success        = $false
+        Reason         = "WhatIf"
+        SequenceNumber = $target.SequenceNumber
+        Description    = $target.Description
+    }
 }
 
 function Test-CheckpointCapability {
@@ -174,7 +218,7 @@ function Test-CheckpointCapability {
     
     $capabilities = @{
         SystemRestoreEnabled = Test-SystemRestoreEnabled
-        AdminPrivileges      = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+        AdminPrivileges      = Test-IsAdmin
     }
     
     $capabilities.CanCreateCheckpoint = $capabilities.SystemRestoreEnabled -and $capabilities.AdminPrivileges

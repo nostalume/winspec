@@ -13,6 +13,8 @@ BeforeAll {
     Import-Module (Join-Path $winspecRoot "diff.psm1")     -Force -Global
     Import-Module (Join-Path $winspecRoot "merge.psm1")    -Force -Global
     Import-Module (Join-Path $winspecRoot "pull.psm1")     -Force -Global
+    Import-Module (Join-Path $winspecRoot "push.psm1")     -Force -Global
+    Import-Module (Join-Path $winspecRoot "sandbox.psm1")  -Force -Global
     Import-Module (Join-Path $winspecRoot "checkpoint.psm1") -Force -Global
     Import-Module (Join-Path $winspecRoot "managers" "registry.psm1") -Force -Global
     
@@ -255,6 +257,75 @@ Describe "Configuration Loading" {
                 $spec | Should -Not -BeNullOrEmpty
                 $spec -is [hashtable] | Should -BeTrue
             }
+        }
+    }
+}
+
+
+Describe "Sandbox Integration" {
+    BeforeEach {
+        $sandboxRoot = Join-Path $TestDrive "sandbox-integration"
+        InModuleScope sandbox -Parameters @{ Root = $sandboxRoot } {
+            param($Root)
+            $Script:SandboxRoot = $Root
+            $Script:SnapshotsDir = Join-Path $Root "snapshots"
+            $Script:HistoryDir = Join-Path $Root "history"
+            $Script:Sandbox = Join-Path $Root "sandbox.json"
+            $Script:SandboxContext = $null
+            Initialize-SandboxDirectory
+        }
+    }
+
+    AfterEach {
+        InModuleScope sandbox {
+            $Script:SandboxContext = $null
+            Remove-Item $Script:SandboxRoot -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It "Should route push through active mock sandbox without live registry mutation" {
+        InModuleScope registry {
+            Mock Set-RegistryValue { throw "live registry mutation should not run" }
+        }
+
+        InModuleScope sandbox {
+            Enter-Sandbox -Mode Mock | Out-Null
+        }
+
+        $spec = @{
+            Registry = @{
+                Explorer = @{ ShowHidden = $true }
+            }
+        }
+
+        $result = Invoke-Push -Spec $spec
+
+        $result.Success | Should -BeTrue
+        $result.Registry.Status | Should -Be "Success"
+
+        InModuleScope sandbox {
+            $state = Get-SandboxState -Provider "Registry"
+            $state.Explorer.ShowHidden | Should -BeTrue
+        }
+    }
+
+    It "Should clean active sandbox context after dry-run push" {
+        $spec = @{ Registry = @{ Explorer = @{ ShowHidden = $true } } }
+
+        Invoke-Push -Spec $spec -DryRun | Out-Null
+
+        InModuleScope sandbox {
+            Test-SandboxActive | Should -BeFalse
+        }
+    }
+
+    It "Should save sandbox history on exit when mock changes exist" {
+        InModuleScope sandbox {
+            Enter-Sandbox -Mode Mock | Out-Null
+            Update-SandboxChanges "Registry" "Apply" @{ Changed = @(@{ Key = "ShowHidden" }) }
+            Exit-Sandbox
+
+            @(Get-ChildItem $Script:HistoryDir -Filter "*.json").Count | Should -Be 1
         }
     }
 }

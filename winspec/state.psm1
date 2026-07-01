@@ -198,12 +198,22 @@ function Get-ForwardedCommonParameters {
 }
 
 function Test-WinSpecSandboxActive {
+    $module = @(Get-Module sandbox)[-1]
+    if ($module -and $module.ExportedCommands.ContainsKey("Test-SandboxActive")) {
+        return & $module.ExportedCommands["Test-SandboxActive"]
+    }
+
     $cmd = Get-Command Test-SandboxActive -ErrorAction SilentlyContinue
     if (-not $cmd) { return $false }
     return & $cmd
 }
 
 function Get-WinSpecSandboxMode {
+    $module = @(Get-Module sandbox)[-1]
+    if ($module -and $module.ExportedCommands.ContainsKey("Get-SandboxMode")) {
+        return & $module.ExportedCommands["Get-SandboxMode"]
+    }
+
     $cmd = Get-Command Get-SandboxMode -ErrorAction SilentlyContinue
     if (-not $cmd) { return "Live" }
     return & $cmd
@@ -488,9 +498,9 @@ function Invoke-Manager {
         return @{ Status = "DryRun" }
     }
     finally {
-        if ($module) {
-            Remove-Module -ModuleInfo $module -Force -ErrorAction SilentlyContinue -WhatIf:$false
-        }
+        # Keep provider modules loaded after invocation. Removing a provider module can also
+        # remove shared dependency commands (logging/sandbox) that the orchestrator still
+        # needs later in the same push/diff cycle.
     }
 }
 
