@@ -490,6 +490,86 @@ function Invoke-Trigger {
 Export-ModuleMember -Function @("Get-ProviderInfo", "Invoke-Trigger")
 ```
 
+
+---
+
+## Custom behavior model
+
+Use this model when you want to configure or extend WinSpec behavior.
+
+### Declarative managers vs triggers
+
+| Kind | Purpose | Spec location | Module location | Runtime behavior |
+| --- | --- | --- | --- | --- |
+| Declarative manager | Idempotent desired state | Provider-named sections such as `Registry`, `Feature`, `Service`, or your provider name | `managers/<name>.psm1` | Export, compare, test, then apply missing changes. |
+| Trigger | Explicit non-idempotent action | `Trigger` + `TriggerConfig` | `triggers/<name>.psm1` | Runs only when selected. Parameters are splatted into typed `Invoke-Trigger` params. |
+
+A declarative provider owns one top-level spec section:
+
+```powershell
+MyProvider = @{
+    Setting = "value"
+}
+```
+
+A trigger is split into selection and configuration:
+
+```powershell
+Trigger = @("mytrigger")
+
+TriggerConfig = @{
+    mytrigger = @{ Mode = "safe"; ExampleFlag = $true }
+}
+```
+
+Do not put trigger parameter maps inside `Trigger`; `Trigger` only names actions to run.
+
+### Provider discovery and config path
+
+WinSpec discovers built-in providers from its installation and user providers from the resolved config path:
+
+```text
+<config>/managers/*.psm1
+<config>/triggers/*.psm1
+```
+
+Each provider module must export `Get-ProviderInfo`. The `Name` returned by `Get-ProviderInfo` is the public spec section name for managers and the public selection name for triggers.
+
+### Runtime controls are not stored config
+
+Runtime controls such as `-WhatIf`, `-Confirm`, `-Verbose`, and `-ErrorAction` are command-line execution controls. They are forwarded through orchestration when supported, but they do not belong in stored spec fields.
+
+Use:
+
+```powershell
+winspec push -Spec ./my-config.ps1 -WhatIf
+winspec push -Spec ./my-config.ps1 -DryRun
+```
+
+not persistent config fields such as `ConfirmRemoteExecution`.
+
+### State workflow mental model
+
+For declarative managers, WinSpec follows this lifecycle:
+
+```text
+pull/status: discover managers -> Export-<Name>State -> spec-shaped state
+
+diff:        discover managers -> Compare-<Name>State -> Added/Removed/Changed/Equal rows
+
+push:        discover managers -> Test-<Name>State -> Set-<Name>State when needed
+```
+
+For triggers, WinSpec follows this lifecycle:
+
+```text
+selection:   CLI -Triggers overrides Spec.Trigger; otherwise Spec.Trigger selects actions
+
+config:      TriggerConfig.<name> becomes typed Invoke-Trigger parameters
+
+execution:   import exact trigger module -> invoke its exported Invoke-Trigger command
+```
+
 ---
 
 ## Common workflows
