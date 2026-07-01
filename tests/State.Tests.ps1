@@ -257,6 +257,16 @@ Describe "Provider Discovery" {
                 $managerNames | Should -Not -Contain "Winget"
             }
         }
+
+        It "Should include Service in the default provider list" {
+            InModuleScope state {
+                $providers = Resolve-ProviderList
+
+                $providers | Should -Contain "Registry"
+                $providers | Should -Contain "Feature"
+                $providers | Should -Contain "Service"
+            }
+        }
     }
 }
 

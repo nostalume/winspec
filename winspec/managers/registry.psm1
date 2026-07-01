@@ -299,7 +299,7 @@ function Invoke-RegistrySandbox {
         [hashtable]$Desired
     )
 
-    if (!Test-SandboxActive) {
+    if (-not (Test-SandboxActive)) {
         throw "Sandbox not active"
     }
 

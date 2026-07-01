@@ -21,8 +21,18 @@ function Test-FeatureInDesiredState {
         [string]$CurrentState
     )
     
-    return ($DesiredState -eq "enabled" -and $CurrentState -eq "Enabled") -or
-    ($DesiredState -eq "disabled" -and $CurrentState -eq "Disabled")
+    return (ConvertTo-FeatureSpecState $DesiredState) -eq (ConvertTo-FeatureSpecState $CurrentState)
+}
+
+function ConvertTo-FeatureSpecState {
+    param($State)
+
+    if ($null -eq $State) { return $null }
+    switch ($State.ToString().ToLowerInvariant()) {
+        "enabled" { return "enabled" }
+        "disabled" { return "disabled" }
+        default { return $State }
+    }
 }
 
 function Test-FeatureState {
@@ -185,8 +195,9 @@ function Compare-FeatureState {
     $differences = @()
     
     foreach ($featureName in $Desired.Keys) {
-        $desiredState = $Desired[$featureName]
+        $desiredState = ConvertTo-FeatureSpecState $Desired[$featureName]
         $systemState = if ($System.ContainsKey($featureName)) { $System[$featureName] } else { $null }
+        $systemSpecState = ConvertTo-FeatureSpecState $systemState
         
         $path = "Feature.$featureName"
         
@@ -199,7 +210,7 @@ function Compare-FeatureState {
                 ConfigValue = $desiredState
             }
         }
-        elseif ($systemState -ne $desiredState) {
+        elseif ($systemSpecState -ne $desiredState) {
             # State changed
             $differences += @{
                 Type        = "Changed"
@@ -210,19 +221,6 @@ function Compare-FeatureState {
         }
         # Skip "Equal" entries - only Added, Changed, Removed for cleaner diffs
     }
-    
-    # Check for removed features (in system but not in desired)
-    foreach ($featureName in $System.Keys) {
-        if (-not $Desired.ContainsKey($featureName)) {
-            $differences += @{
-                Type        = "Removed"
-                Path        = "Feature.$featureName"
-                SystemValue = $System[$featureName]
-                ConfigValue = $null
-            }
-        }
-    }
-    
     return $differences
 }
 
@@ -248,7 +246,7 @@ function Invoke-FeatureSandbox {
         [hashtable]$Desired
     )
 
-    if (!Test-SandboxActive) {
+    if (-not (Test-SandboxActive)) {
         throw "Sandbox not active"
     }
 
@@ -303,6 +301,7 @@ function Invoke-FeatureSandboxApply {
 Export-ModuleMember -Function @(
     "Get-ProviderInfo"
     "Get-FeatureState"
+    "ConvertTo-FeatureSpecState"
     "Test-FeatureInDesiredState"
     "Test-FeatureState"
     "Set-FeatureState"

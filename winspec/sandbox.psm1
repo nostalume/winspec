@@ -13,12 +13,6 @@ $Script:SnapshotsDir = Join-Path $Script:SandboxRoot "snapshots"
 $Script:HistoryDir = Join-Path $Script:SandboxRoot "history"
 $Script:Sandbox = Join-Path $Script:SandboxRoot "sandbox.json"
 
-$Script:Providers = @(
-    "Registry",
-    "Service",
-    "Feature"
-)
-
 $Script:SandboxContext = $null
 
 
@@ -50,7 +44,7 @@ function New-SandboxState {
         Registry = @{
             Explorer  = @{
                 ShowHidden  = $false
-                HideFileExt = $true
+                ShowFileExt = $false
             }
             Clipboard = @{}
             Theme     = @{}
@@ -82,12 +76,51 @@ function New-SandboxContext {
     }
 }
 
+function ConvertTo-SandboxHashtable {
+    param($Value)
+
+    if ($null -eq $Value) { return $null }
+    if ($Value -is [hashtable]) { return $Value }
+    if ($Value -is [System.Collections.IDictionary]) {
+        $result = @{}
+        foreach ($key in $Value.Keys) { $result[$key] = ConvertTo-SandboxHashtable $Value[$key] }
+        return $result
+    }
+    if ($Value -is [System.Collections.IEnumerable] -and $Value -isnot [string]) {
+        return @($Value | ForEach-Object { ConvertTo-SandboxHashtable $_ })
+    }
+    if ($Value.PSObject.Properties.Count -gt 0 -and $Value.GetType().Name -eq "PSCustomObject") {
+        $result = @{}
+        foreach ($prop in $Value.PSObject.Properties) { $result[$prop.Name] = ConvertTo-SandboxHashtable $prop.Value }
+        return $result
+    }
+    return $Value
+}
+
 function Get-SandboxContext {
     if (Test-Path $Script:Sandbox) {
-        return Get-Content $Script:Sandbox -Raw | ConvertFrom-Json -Depth 20
-    } else {
-        return $null
+        return ConvertTo-SandboxHashtable (Get-Content $Script:Sandbox -Raw | ConvertFrom-Json -Depth 20)
     }
+    return $null
+}
+
+function Save-SandboxContext {
+    param([hashtable]$Context)
+
+    Initialize-SandboxDirectory
+    $tmp = "$Script:Sandbox.tmp"
+    $Context | ConvertTo-Json -Depth 20 | Set-Content -Path $tmp -Encoding UTF8
+    Move-Item -Path $tmp -Destination $Script:Sandbox -Force
+}
+
+function Use-SandboxContext {
+    if ($Script:SandboxContext) { return $true }
+    $ctx = Get-SandboxContext
+    if ($ctx) {
+        $Script:SandboxContext = $ctx
+        return $true
+    }
+    return $false
 }
 
 function Test-SandboxActive {
@@ -95,7 +128,7 @@ function Test-SandboxActive {
 }
 
 function Get-SandboxMode {
-    if (-not $Script:SandboxContext) {
+    if (-not (Use-SandboxContext)) {
         return "Live"
     }
 
@@ -119,7 +152,7 @@ function Import-SandboxState {
     }
 
     try {
-        $json = Get-Content $file -Raw | ConvertFrom-Json
+        $json = ConvertTo-SandboxHashtable (Get-Content $file -Raw | ConvertFrom-Json -Depth 20)
         return $json.state
     }
     catch {
@@ -193,10 +226,9 @@ function Enter-Sandbox {
     }
 
     # deep clone via json
-    $ctx.Original = $ctx.State | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+    $ctx.Original = ConvertTo-SandboxHashtable ($ctx.State | ConvertTo-Json -Depth 20 | ConvertFrom-Json -Depth 20)
     $Script:SandboxContext = $ctx
-    # persistent sandbox state
-    $ctx | ConvertTo-Json -Depth 20 | Set-Content -Path $Script:Sandbox
+    Save-SandboxContext $ctx
 
     Write-Log -Level OK -Message "Entered sandbox ($Mode / $Snapshot)"
 
@@ -256,7 +288,7 @@ function Get-SandboxState {
 
     param([string]$Provider)
 
-    if (!$Script:SandboxContext) {
+    if (-not (Use-SandboxContext)) {
         throw "Sandbox not active"
     }
 
@@ -270,7 +302,7 @@ function Update-SandboxState {
         [scriptblock]$Mutation
     )
 
-    if (!$Script:SandboxContext) {
+    if (-not (Use-SandboxContext)) {
         throw "Sandbox not active"
     }
 
@@ -281,22 +313,19 @@ function Update-SandboxState {
     if ($null -ne $newState) {
         $Script:SandboxContext.State[$Provider] = $newState
     }
+    Save-SandboxContext $Script:SandboxContext
 }
 
 
 function Reset-SandboxState {
 
-    if (!$Script:SandboxContext) {
+    if (-not (Use-SandboxContext)) {
         return
     }
 
-    $Script:SandboxContext.State =
-    ConvertFrom-Json (
-        $Script:SandboxContext.Original |
-        ConvertTo-Json -Depth 20
-    ) -AsHashtable
-
+    $Script:SandboxContext.State = ConvertTo-SandboxHashtable ($Script:SandboxContext.Original | ConvertTo-Json -Depth 20 | ConvertFrom-Json -Depth 20)
     $Script:SandboxContext.Changes = @()
+    Save-SandboxContext $Script:SandboxContext
 
     Write-Log -Level INFO -Message "Sandbox reset"
 }
@@ -313,7 +342,7 @@ function Update-SandboxChanges {
         $Data
     )
 
-    if (!$Script:SandboxContext) {
+    if (-not (Use-SandboxContext)) {
         return
     }
 
@@ -323,11 +352,12 @@ function Update-SandboxChanges {
         data     = $Data
         time     = Get-Date
     }
+    Save-SandboxContext $Script:SandboxContext
 }
 
 
 function Get-SandboxChanges {
-    if (!$Script:SandboxContext) {
+    if (-not (Use-SandboxContext)) {
         return @()
     }
 
@@ -335,120 +365,11 @@ function Get-SandboxChanges {
 }
 
 
-# ------------------------------------------------------------
-# Provider Comparison Dispatch
-# ------------------------------------------------------------
-
-$Script:ProviderComparators = @{}
-
-
-function Register-ProviderComparator {
-    param(
-        [string]$Provider,
-        [scriptblock]$Comparator
-    )
-
-    $Script:ProviderComparators[$Provider] = $Comparator
-}
-
-
-function Compare-ProviderState {
-    param(
-        [string]$Provider,
-        $Current,
-        $Desired
-    )
-
-    if (!$Script:ProviderComparators.ContainsKey($Provider)) {
-        throw "No comparator registered for $Provider"
-    }
-
-    $cmp = $Script:ProviderComparators[$Provider]
-
-    & $cmp $Current $Desired
-}
-
-
-# ------------------------------------------------------------
-# DryRun Engine
-# ------------------------------------------------------------
-
-function Invoke-SandboxDryRun {
-    param(
-        [hashtable]$Spec,
-        [scriptblock]$SystemStateProvider
-    )
-
-    $result = @{
-        Mode       = "DryRun"
-        Comparison = @{}
-    }
-
-    foreach ($provider in $Script:Providers) {
-        if (!$Spec.ContainsKey($provider)) {
-            continue
-        }
-
-        $desired = $Spec[$provider]
-
-        if ($Script:SandboxContext -and $Script:SandboxContext.Mode -eq "Mock") {
-            $current = $Script:SandboxContext.State[$provider]
-        }
-        elseif ($SystemStateProvider) {
-            $current = & $SystemStateProvider $provider
-        }
-        else {
-            continue
-        }
-
-        $result.Comparison[$provider] =
-        Compare-ProviderState $provider $current $desired
-    }
-
-    return $result
-}
-
-
-# ------------------------------------------------------------
-# Diff Formatter
-# ------------------------------------------------------------
-
-function Format-SandboxDiff {
-    param([hashtable]$Comparison)
-
-    $out = @()
-
-    foreach ($provider in $Comparison.Keys) {
-        $comp = $Comparison[$provider]
-
-        $out += "=== $provider ==="
-
-        foreach ($a in $comp.Added) {
-            $out += "[+] $a"
-        }
-
-        foreach ($r in $comp.Removed) {
-            $out += "[-] $r"
-        }
-
-        foreach ($c in $comp.Changed) {
-            $out += "[~] $c"
-        }
-
-        foreach ($u in $comp.Unchanged) {
-            $out += "[=] $u"
-        }
-
-        $out += ""
-    }
-
-    return $out -join "`n"
-}
-
 Export-ModuleMember -Function @(
     "Test-SandboxActive"
     "Get-SandboxMode"
     "Get-SandboxContext"
+    "Save-SandboxContext"
 
     "Import-SandboxState"
     "Export-SandboxState"
@@ -465,7 +386,4 @@ Export-ModuleMember -Function @(
 
     "Get-SandboxChanges"
     "Update-SandboxChanges"
-
-    # Invoke-SandboxDryRun
-    # Format-SandboxDiff
 )

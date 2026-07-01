@@ -238,8 +238,7 @@ function Get-ProviderExportedCommand {
 function Resolve-ProviderList {
     param([string[]]$Providers = @())
     
-    # Registry, Feature, Service
-    $defaultProviders = @("Registry", "Feature")
+    $defaultProviders = @("Registry", "Feature", "Service")
     
     if ($providers -and $Providers.Count -gt 0) { return $Providers }
     

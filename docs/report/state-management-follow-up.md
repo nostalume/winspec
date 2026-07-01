@@ -2,6 +2,32 @@
 
 This development report holds review findings and implementation slices for state comparison and sandbox consistency. It is intentionally outside `docs/reference.md`; the reference remains current API/workflow surface, while this file is a development plan.
 
+
+## Implementation status
+
+Completed in the state-management slice:
+
+- Slice 1: RED comparison/sandbox tests added and observed failing before code.
+- Slice 2: `Feature` comparison now normalizes Windows-cased state to spec values.
+- Slice 3: `Service` comparison now normalizes state/startup and emits leaf changed rows.
+- Slice 4: `Feature` and `Service` comparisons now treat omitted desired keys as unmanaged by default.
+- Slice 5: default provider list now includes `Service`.
+- Slice 6: sandbox mode/state access hydrates persisted context when process-local state is empty.
+- Slice 7: sandbox mutations persist to `sandbox.json`; mock registry state uses public spec keys.
+- Slice 8: unused sandbox comparator/dry-run/formatter path removed; sandbox apply uses provider-local hooks.
+
+Verification routine for the implementation slice:
+
+1. Run focused RED tests and confirm expected failures.
+2. Implement smallest provider/sandbox changes.
+3. Run focused Pester tests for comparison and sandbox behavior.
+4. Run parser checks on touched PowerShell files.
+5. Run `git diff --check`.
+6. Run full Pester suite.
+7. Run ad-hoc temp verifier under `F:\Stratum\TEMP` and clean it up.
+
+---
+
 ## Scope
 
 Review targets:
@@ -49,9 +75,8 @@ Current algorithm:
 Assessment:
 
 - Good: detects features present in captured state but absent from desired.
-- Correctness gap: desired values are schema-level lowercase (`enabled`/`disabled`), while `Export-FeatureState` returns Windows casing (`Enabled`/`Disabled`). Direct string comparison can mark equal states as changed.
-- Noise gap: when comparing a sparse desired spec against a broad live export, removed-feature rows can dominate the diff even though omitted features may be intentionally unmanaged.
-- Recommended next slice: normalize feature state values before comparison and decide whether provider comparisons should use sparse-spec semantics by default.
+- Fixed: desired values are schema-level lowercase (`enabled`/`disabled`), while `Export-FeatureState` returns Windows casing (`Enabled`/`Disabled`); comparison now normalizes both sides.
+- Fixed: sparse desired specs no longer emit removed rows for omitted live features.
 
 ### Service comparison
 
@@ -68,9 +93,9 @@ Current algorithm:
 Assessment:
 
 - Good: can report `Equal`, `Changed`, `Added`, and `Removed` rows.
-- Correctness gap: desired spec uses lowercase values (`running`, `stopped`, `automatic`, `manual`, `disabled`), while service export uses PowerShell/.NET casing (`Running`, `Stopped`, `Automatic`, etc.). Direct comparison can mark equal states as changed.
-- Granularity gap: state and startup differences are collapsed into one service-level row. That is usable, but less precise than registry property-level rows.
-- Scope gap: default provider list is currently `Registry`, `Feature`; `Service` is built in and schema-valid but not part of the default capture/compare provider list unless selected.
+- Fixed: desired spec uses lowercase values (`running`, `stopped`, `automatic`, `manual`, `disabled`), while service export uses PowerShell/.NET casing (`Running`, `Stopped`, `Automatic`, etc.); comparison now normalizes both sides.
+- Fixed: state and startup differences now emit leaf rows instead of one whole-service changed row.
+- Fixed: default provider list now includes `Service`, so built-in manager defaults match the schema-valid declarative provider set.
 
 ### Cross-provider comparison consistency
 

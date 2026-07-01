@@ -49,6 +49,30 @@ function Convert-ServiceObject {
     }
 }
 
+function ConvertTo-ServiceSpecState {
+    param($State)
+
+    if ($null -eq $State) { return $null }
+    switch ($State.ToString().ToLowerInvariant()) {
+        "running" { return "running" }
+        "stopped" { return "stopped" }
+        default { return $State }
+    }
+}
+
+function ConvertTo-ServiceSpecStartup {
+    param($Startup)
+
+    if ($null -eq $Startup) { return $null }
+    switch ($Startup.ToString().ToLowerInvariant()) {
+        "auto" { return "automatic" }
+        "automatic" { return "automatic" }
+        "manual" { return "manual" }
+        "disabled" { return "disabled" }
+        default { return $Startup }
+    }
+}
+
 function Get-ServiceState {
     [CmdletBinding()]
     param(
@@ -90,11 +114,11 @@ function Test-ServiceState {
 
         $target = $Desired[$name]
 
-        if ($target.State -and $current.State -ne $target.State) {
+        if ($target.State -and (ConvertTo-ServiceSpecState $current.State) -ne (ConvertTo-ServiceSpecState $target.State)) {
             return $false
         }
 
-        if ($target.Startup -and $current.Startup -ne $target.Startup) {
+        if ($target.Startup -and (ConvertTo-ServiceSpecStartup $current.Startup) -ne (ConvertTo-ServiceSpecStartup $target.Startup)) {
             return $false
         }
     }
@@ -133,7 +157,7 @@ function Set-ServiceState {
         $result = @{}
 
         # --- Startup ---
-        if ($target.Startup -and $current.Startup -ne $target.Startup) {
+        if ($target.Startup -and (ConvertTo-ServiceSpecStartup $current.Startup) -ne (ConvertTo-ServiceSpecStartup $target.Startup)) {
             Write-LogChange -Name "$name.Startup" `
                 -CurrentValue $current.Startup `
                 -DesiredValue $target.Startup
@@ -153,8 +177,8 @@ function Set-ServiceState {
 
         # --- State ---
         if ($target.State) {
-            $shouldRun = $target.State -eq "Running"
-            $isRunning = $current.State -eq "Running"
+            $shouldRun = (ConvertTo-ServiceSpecState $target.State) -eq "running"
+            $isRunning = (ConvertTo-ServiceSpecState $current.State) -eq "running"
 
             if ($shouldRun -eq $isRunning) {
                 $results[$name] = $result
@@ -250,9 +274,10 @@ function Compare-ServiceState {
             continue
         }
 
-        if ($systemConfig.State -eq $desiredConfig.State -and
-            $systemConfig.Startup -eq $desiredConfig.Startup) {
+        $stateEqual = (ConvertTo-ServiceSpecState $systemConfig.State) -eq (ConvertTo-ServiceSpecState $desiredConfig.State)
+        $startupEqual = (ConvertTo-ServiceSpecStartup $systemConfig.Startup) -eq (ConvertTo-ServiceSpecStartup $desiredConfig.Startup)
 
+        if ($stateEqual -and $startupEqual) {
             [void]$diffs.Add([pscustomobject]@{
                 Type        = "Equal"
                 Path        = $path
@@ -263,23 +288,23 @@ function Compare-ServiceState {
             continue
         }
 
-        [void]$diffs.Add([pscustomobject]@{
-            Type        = "Changed"
-            Path        = $path
-            SystemValue = $systemConfig
-            ConfigValue = $desiredConfig
-        })
-    }
+        if (-not $stateEqual) {
+            [void]$diffs.Add([pscustomobject]@{
+                Type        = "Changed"
+                Path        = "$path.State"
+                SystemValue = $systemConfig.State
+                ConfigValue = $desiredConfig.State
+            })
+        }
 
-    foreach ($name in $System.Keys) {
-        if ($Desired.ContainsKey($name)) { continue }
-
-        [void]$diffs.Add([pscustomobject]@{
-            Type        = "Removed"
-            Path        = "Service.$name"
-            SystemValue = $System[$name]
-            ConfigValue = $null
-        })
+        if (-not $startupEqual) {
+            [void]$diffs.Add([pscustomobject]@{
+                Type        = "Changed"
+                Path        = "$path.Startup"
+                SystemValue = $systemConfig.Startup
+                ConfigValue = $desiredConfig.Startup
+            })
+        }
     }
 
     return $diffs.ToArray()
@@ -297,7 +322,7 @@ Simulates Windows service configuration changes inside sandbox.
         [hashtable]$Desired
     )
 
-    if (!Test-SandboxActive) {
+    if (-not (Test-SandboxActive)) {
         throw "Sandbox not active"
     }
 
@@ -310,25 +335,28 @@ Simulates Windows service configuration changes inside sandbox.
 
         param($state)
 
+        if (-not $state) { $state = @{} }
         foreach ($service in $Desired.Keys) {
+            if (-not $state[$service]) { $state[$service] = @{} }
 
-            $desiredStartup = $Desired[$service].Startup
-            $currentStartup = if ($state[$service]) { $state[$service].Startup } else { $null }
+            foreach ($field in @("State", "Startup")) {
+                $desiredValue = $Desired[$service][$field]
+                if ($null -eq $desiredValue) { continue }
 
-            if ($currentStartup -ne $desiredStartup) {
+                $currentValue = $state[$service][$field]
+                if ($currentValue -eq $desiredValue) { continue }
 
                 $results.Changed += @{
-                    Name       = $service
-                    OldStartup = $currentStartup
-                    NewStartup = $desiredStartup
+                    Name     = $service
+                    Field    = $field
+                    OldValue = $currentValue
+                    NewValue = $desiredValue
                 }
-
-                $state[$service] = @{
-                    Startup = $desiredStartup
-                }
+                $state[$service][$field] = $desiredValue
             }
         }
 
+        return $state
     }
 
     Update-SandboxChanges "Service" "Apply" $results
@@ -349,6 +377,8 @@ function Invoke-ServiceSandboxApply {
 Export-ModuleMember -Function @(
     "Get-ProviderInfo"
     "Get-ServiceState"
+    "ConvertTo-ServiceSpecState"
+    "ConvertTo-ServiceSpecStartup"
     "Get-AllServiceStates"
     "Test-ServiceState"
     "Set-ServiceState"
