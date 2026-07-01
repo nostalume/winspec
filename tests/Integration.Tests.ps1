@@ -68,7 +68,8 @@ Describe "State Management" {
     Context "Compare-SystemState" {
         It "Should return a hashtable with Added/Removed/Changed/Equal keys" {
             InModuleScope state {
-                Mock Get-Managers { return @() }
+                Mock Get-Managers { return @([PSCustomObject]@{ Name = "Registry"; Type = "Declarative"; Path = "registry.psm1" }) }
+                Mock Compare-ProviderState { return @() }
 
                 $spec    = @{ Registry = @{ Explorer = @{ ShowHidden = $true } } }
                 $against = @{ Registry = @{ Explorer = @{ ShowHidden = $false } } }
@@ -91,7 +92,7 @@ Describe "State Management" {
     
     Context "Format-DiffOutput" {
         It "Should format added items" {
-            InModuleScope state {
+            InModuleScope diff {
                 $diff = @{
                     Added = @(
                         @{ Path = "Registry.Explorer.ShowHidden"; ConfigValue = $true; SystemValue = $null }
@@ -109,7 +110,7 @@ Describe "State Management" {
         }
         
         It "Should format changed items" {
-            InModuleScope state {
+            InModuleScope diff {
                 $diff = @{
                     Added   = @()
                     Changed = @(
@@ -126,7 +127,7 @@ Describe "State Management" {
         }
         
         It "Should format removed items" {
-            InModuleScope state {
+            InModuleScope diff {
                 $diff = @{
                     Added   = @()
                     Changed = @()
@@ -163,6 +164,68 @@ Describe "Provider Execution" {
                 $result = Invoke-Managers -Config $spec -WhatIf
                 $result | Should -Not -BeNullOrEmpty
                 $result -is [hashtable] | Should -BeTrue
+            }
+        }
+
+        It "Should discover user managers from ConfigPath" {
+            $root = Join-Path $TestDrive "user-manager"
+            $managerDir = Join-Path $root "managers"
+            New-Item -ItemType Directory -Path $managerDir -Force | Out-Null
+            @'
+function Get-ProviderInfo { @{ Name = "Custom"; Type = "Declarative" } }
+function Test-CustomState { param([hashtable]$Desired) $false }
+function Set-CustomState { param([hashtable]$Desired) @{ Status = "Applied"; Desired = $Desired } }
+Export-ModuleMember -Function Get-ProviderInfo, Test-CustomState, Set-CustomState
+'@ | Set-Content -Path (Join-Path $managerDir "Custom.psm1")
+
+            InModuleScope state -Parameters @{ Root = $root } {
+                param($Root)
+                $result = Invoke-Managers -Config @{ Custom = @{ Enabled = $true } } -ConfigPath $Root
+
+                $result.ContainsKey("Custom") | Should -BeTrue
+                $result.Custom.Status | Should -Be "Applied"
+            }
+        }
+    }
+}
+
+Describe "WinSpec Execution" {
+    Context "Invoke-WinSpec" {
+        It "Should forward WhatIf to trigger commands" {
+            $root = Join-Path $TestDrive "winspec-whatif-trigger"
+            $triggerDir = Join-Path $root "triggers"
+            New-Item -ItemType Directory -Path $triggerDir -Force | Out-Null
+            @'
+function Get-ProviderInfo { @{ Name = "guarded"; Type = "Trigger" } }
+function Invoke-Trigger {
+    [CmdletBinding(SupportsShouldProcess = $true)]
+    param()
+    if ($PSCmdlet.ShouldProcess("guarded", "execute")) { @{ Status = "Executed" } }
+    else { @{ Status = "DryRun" } }
+}
+Export-ModuleMember -Function Get-ProviderInfo, Invoke-Trigger
+'@ | Set-Content -Path (Join-Path $triggerDir "guarded.psm1")
+
+            InModuleScope state -Parameters @{ Root = $root } {
+                param($Root)
+                $result = Invoke-WinSpec -Spec @{ Trigger = @("guarded") } -ConfigPath $Root -WhatIf
+
+                $result.Triggers.guarded.Status | Should -Be "DryRun"
+            }
+        }
+
+        It "Should not summarize Success as a provider result" {
+            InModuleScope state {
+                Mock Test-SpecSchema { $true }
+                Mock Invoke-Managers { @{ Registry = @{ Status = "AlreadyInDesiredState" } } }
+                Mock Invoke-Triggers { @{} }
+                Mock Write-Log { }
+                Mock Write-LogHeader { }
+                Mock Write-LogSection { }
+
+                Invoke-WinSpec -Spec @{ Registry = @{ Explorer = @{ ShowHidden = $true } } } | Out-Null
+
+                Should -Invoke Write-Log -ParameterFilter { $Message -like "*[Success]:*" } -Times 0
             }
         }
     }

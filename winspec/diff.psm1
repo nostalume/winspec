@@ -7,6 +7,61 @@ Import-Module (Join-Path $PSScriptRoot "logging.psm1") -Force
 Import-Module (Join-Path $PSScriptRoot "utils.psm1") -Force
 Import-Module (Join-Path $PSScriptRoot "state.psm1") -Force
 
+function ConvertTo-DisplayValue {
+    param($Value)
+    if ($null -eq $Value) { return '(null)' }
+    if ($Value -is [bool]) { return $Value.ToString().ToLower() }
+    return $Value.ToString()
+}
+
+function Format-DiffOutput {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][hashtable]$Differences)
+
+    $output = @()
+    $output += "`n=== STATE DIFFERENCES ===`n"
+
+    $addedItems = if ($Differences.Added) { $Differences.Added } else { @() }
+    if ($addedItems.Count -gt 0) {
+        $output += "`n[+] ADDED (in config, not in system):"
+        foreach ($item in $addedItems) {
+            $output += "    $($item.Path)"
+            $output += "       Value: $(ConvertTo-DisplayValue $item.ConfigValue)"
+        }
+    }
+
+    $removedItems = if ($Differences.Removed) { $Differences.Removed } else { @() }
+    if ($removedItems.Count -gt 0) {
+        $output += "`n[-] REMOVED (in system, not in config):"
+        foreach ($item in $removedItems) {
+            $output += "    $($item.Path)"
+            $output += "       Current: $(ConvertTo-DisplayValue $item.SystemValue)"
+        }
+    }
+
+    $changedItems = if ($Differences.Changed) { $Differences.Changed } else { @() }
+    if ($changedItems.Count -gt 0) {
+        $output += "`n[~] CHANGED (different values):"
+        foreach ($item in $changedItems) {
+            $output += "    $($item.Path)"
+            $output += "       System:  $(ConvertTo-DisplayValue $item.SystemValue)"
+            $output += "       Config:  $(ConvertTo-DisplayValue $item.ConfigValue)"
+        }
+    }
+
+    $equalCount = if ($Differences.Equal) { $Differences.Equal.Count } else { 0 }
+    if ($equalCount -gt 0) {
+        $output += "`n[=] EQUAL (matched): $equalCount items"
+    }
+
+    $totalChanges = $addedItems.Count + $removedItems.Count + $changedItems.Count
+    $output += "`n---"
+    $output += "Summary: $($addedItems.Count) added, $($removedItems.Count) removed, $($changedItems.Count) changed, $equalCount equal"
+    $output += "`nTotal differences: $totalChanges"
+
+    return $output -join "`n"
+}
+
 function Invoke-Diff {
     <#
     .SYNOPSIS
@@ -45,12 +100,15 @@ function Invoke-Diff {
         [string]$OutputFormat = "text",
         
         [Parameter(Mandatory = $false)]
-        [switch]$ShowEqual
+        [switch]$ShowEqual,
+
+        [Parameter(Mandatory = $false)]
+        [string]$ConfigPath
     )
     
     Write-Log -Level "INFO" -Message "Starting diff operation..."
     
-    $differences = Compare-SystemState -Spec $Spec -Against $Against -Providers $Providers
+    $differences = Compare-SystemState -Spec $Spec -Against $Against -Providers $Providers -ConfigPath $ConfigPath
     if ($null -eq $differences) {
         Write-Log -Level "ERROR" -Message "Failed to compare system state"
         return $null
@@ -100,5 +158,7 @@ function Invoke-Diff {
 }
 
 Export-ModuleMember -Function @(
-    "Invoke-Diff"
+    "Invoke-Diff",
+    "ConvertTo-DisplayValue",
+    "Format-DiffOutput"
 )

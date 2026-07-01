@@ -13,14 +13,6 @@ Import-Module (Join-Path $ModuleRoot "sandbox.psm1") -ErrorAction SilentlyContin
 # PROVIDER RESOLUTION
 # =============================================================================
 
-# Provider cache for performance
-$script:CachedProviders = $null
-
-# State cache for performance (avoids repeated external command calls)
-$script:ProviderStateCache = @{}
-$script:StateCacheTimestamp = $null
-$script:StateCacheTTLSeconds = 30  # Cache state for 30 seconds
-
 function Clear-SystemStateCache {
     <#
     .SYNOPSIS
@@ -31,9 +23,6 @@ function Clear-SystemStateCache {
     #>
     [CmdletBinding()]
     param()
-    
-    $script:ProviderStateCache = @{}
-    $script:StateCacheTimestamp = $null
 }
 # =============================================================================
 # PROVIDER DISCOVERY
@@ -219,6 +208,33 @@ function Get-ForwardedCommonParameters {
     return $common
 }
 
+function Test-WinSpecSandboxActive {
+    $cmd = Get-Command Test-SandboxActive -ErrorAction SilentlyContinue
+    if (-not $cmd) { return $false }
+    return & $cmd
+}
+
+function Get-WinSpecSandboxMode {
+    $cmd = Get-Command Get-SandboxMode -ErrorAction SilentlyContinue
+    if (-not $cmd) { return "Live" }
+    return & $cmd
+}
+
+function Get-ProviderExportedCommand {
+    param(
+        [Parameter(Mandatory)]
+        [System.Management.Automation.PSModuleInfo]$Module,
+
+        [Parameter(Mandatory)]
+        [string]$Name
+    )
+
+    if ($Module.ExportedCommands.ContainsKey($Name)) {
+        return $Module.ExportedCommands[$Name]
+    }
+    return $null
+}
+
 function Resolve-ProviderList {
     param([string[]]$Providers = @())
     
@@ -241,11 +257,8 @@ function Resolve-ProviderCommand {
     $cmdName = "$Operation-$($Provider.Name)State"
     Write-Verbose "Resolving provider command: $cmdName"
 
-    if (-not (Get-Module -Name $Provider.Name)) {
-        Import-Module $Provider.Path -ErrorAction Stop
-    }
-
-    return Get-Command -Name $cmdName -Module $Provider.Name -ErrorAction SilentlyContinue
+    $module = Import-Module $Provider.Path -PassThru -ErrorAction Stop
+    return Get-ProviderExportedCommand -Module $module -Name $cmdName
 }
 
 # =============================================================================
@@ -283,23 +296,6 @@ function Get-SystemState {
         [switch]$NoCache
     )
 
-    # Cache
-    $now = Get-Date
-    if (-not $NoCache -and
-        $script:StateCacheTimestamp -and
-        ($now - $script:StateCacheTimestamp).TotalSeconds -lt $script:StateCacheTTLSeconds -and
-        $script:ProviderStateCache.Count -gt 0) {
-
-        $result = @{}
-        foreach ($p in Resolve-ProviderList -Providers $Providers) {
-            if ($script:ProviderStateCache.ContainsKey($p)) {
-                Write-Debug "Provider Cached State: $($script:ProviderStateCache[$p])"
-                $result[$p] = $script:ProviderStateCache[$p]
-            }
-        }
-        return $result
-    }
-
     $allProviders = Get-Managers -ConfigPath $ConfigPath
     Write-Debug "Available providers:`n$($allProviders | Out-String)"
 
@@ -321,9 +317,6 @@ function Get-SystemState {
             $state[$provider.Name] = $providerState
         }
     }
-
-    $script:ProviderStateCache = $state
-    $script:StateCacheTimestamp = Get-Date
 
     return $state
 }
@@ -359,14 +352,20 @@ function Compare-SystemState {
         [Parameter(Mandatory = $true)]
         [hashtable]$Spec,
         [hashtable]$Against,
-        [string[]]$Providers = @()
+        [string[]]$Providers = @(),
+        [string]$ConfigPath
     )
     
     $desiredConfig = $Spec
     $systemConfig = if ($null -eq $Against) { @{} } else { $Against }
-    # Determine providers to compare
     $providersToCompare = Resolve-ProviderList -Providers $Providers | Where-Object {
         $desiredConfig.ContainsKey($_) -or $systemConfig.ContainsKey($_)
+    }
+
+    $providerMap = @{}
+    foreach ($provider in Get-Managers -ConfigPath $ConfigPath) {
+        $providerMap[$provider.Name] = $provider
+        $providerMap[$provider.Name.ToString().ToLowerInvariant()] = $provider
     }
     
     $allDifferences = @{
@@ -376,16 +375,25 @@ function Compare-SystemState {
         Equal   = @()
     }
     
-    # Compare each provider
     foreach ($providerName in $providersToCompare) {
-        $systemState = if ($systemConfig.ContainsKey($providerName)) { $systemConfig[$providerName] } else { @{} }
-        $desiredState = if ($desiredConfig.ContainsKey($providerName)) { $desiredConfig[$providerName] } else { @{} }
+        $provider = $providerMap[$providerName]
+        if (-not $provider) {
+            $provider = $providerMap[$providerName.ToLowerInvariant()]
+        }
+        if (-not $provider) {
+            Write-Log -Level "WARN" -Message "Provider not found for comparison: $providerName"
+            continue
+        }
+
+        $name = $provider.Name
+        $systemState = if ($systemConfig.ContainsKey($name)) { $systemConfig[$name] } else { @{} }
+        $desiredState = if ($desiredConfig.ContainsKey($name)) { $desiredConfig[$name] } else { @{} }
         
         if ($systemState.Count -eq 0 -and $desiredState.Count -eq 0) { continue }
         
-        Write-Log -Level "INFO" -Message "Comparing $providerName state..."
+        Write-Log -Level "INFO" -Message "Comparing $name state..."
         
-        $diffs = Compare-ProviderState -Provider $providerName -Desired $desiredState -Current $systemState
+        $diffs = Compare-ProviderState -Provider $provider -Desired $desiredState -Current $systemState
         
         foreach ($diff in $diffs) {
             switch ($diff.Type) {
@@ -396,7 +404,7 @@ function Compare-SystemState {
             }
         }
         
-        Write-Log -Level "OK" -Message "Found $($diffs.Count) differences in $providerName"
+        Write-Log -Level "OK" -Message "Found $($diffs.Count) differences in $name"
     }
     
     return $allDifferences
@@ -418,7 +426,9 @@ function Invoke-Manager {
         [pscustomobject]$Provider,
 
         [Parameter(Mandatory)]
-        $Config
+        $Config,
+
+        [hashtable]$CommonParameters = @{}
     )
 
     $providerName = $Provider.Name
@@ -426,12 +436,8 @@ function Invoke-Manager {
 
     Write-LogSection -Name $providerName
 
-    # ------------------------------------------------------------
-    # Load provider
-    # ------------------------------------------------------------
-
     try {
-        Import-Module $providerPath -ErrorAction Stop
+        $module = Import-Module $providerPath -PassThru -ErrorAction Stop
     }
     catch {
         Write-Log -Level ERROR -Message "Failed to load provider: $providerName"
@@ -441,9 +447,9 @@ function Invoke-Manager {
     try {
         $desired = $Config.$providerName
 
-        $testStateCmd = Get-Command "Test-$($providerName)State" -ErrorAction SilentlyContinue
-        $setStateCmd  = Get-Command "Set-$($providerName)State"  -ErrorAction SilentlyContinue
-        $sandboxCmd   = Get-Command "Invoke-$($providerName)SandboxApply" -ErrorAction SilentlyContinue
+        $testStateCmd = Get-ProviderExportedCommand -Module $module -Name "Test-$($providerName)State"
+        $setStateCmd  = Get-ProviderExportedCommand -Module $module -Name "Set-$($providerName)State"
+        $sandboxCmd   = Get-ProviderExportedCommand -Module $module -Name "Invoke-$($providerName)SandboxApply"
 
         if (!$testStateCmd -or !$setStateCmd) {
             Write-Log -Level ERROR -Message "Provider $providerName missing required functions"
@@ -451,8 +457,8 @@ function Invoke-Manager {
         }
 
         $mode = "Live"
-        if (Test-SandboxActive) {
-            $mode = Get-SandboxMode
+        if (Test-WinSpecSandboxActive) {
+            $mode = Get-WinSpecSandboxMode
         }
 
         try {
@@ -477,26 +483,27 @@ function Invoke-Manager {
         }
 
         if ($PSCmdlet.ShouldProcess($providerName, "Apply configuration")) {
-
             try {
                 if ($mode -eq "Mock" -and $sandboxCmd) {
-                    $result = & $sandboxCmd -Desired $desired
+                    $result = & $sandboxCmd -Desired $desired @CommonParameters
                     Write-Log -Level INFO -Message "[SANDBOX] $providerName applied"
                     return $result
                 }
 
-                $result = & $setStateCmd -Desired $desired
-                return $result
+                return & $setStateCmd -Desired $desired @CommonParameters
             }
             catch {
                 Write-Log -Level ERROR -Message "$providerName set failed: $_"
                 return @{ Status = "Error"; Message = "Set failed" }
             }
         }
+
+        return @{ Status = "DryRun" }
     }
     finally {
-        # Remove module after execution to free resources (bypass WhatIf - cleanup must always happen)
-        Remove-Module -Name $providerName -Force -ErrorAction SilentlyContinue -WhatIf:$false
+        if ($module) {
+            Remove-Module -ModuleInfo $module -Force -ErrorAction SilentlyContinue -WhatIf:$false
+        }
     }
 }
 
@@ -506,12 +513,16 @@ function Invoke-Managers {
         [Parameter(Mandatory)]
         [hashtable]$Config,
 
-        [string[]]$Providers = @()
+        [string[]]$Providers = @(),
+
+        [string]$ConfigPath,
+
+        [hashtable]$CommonParameters = @{}
     )
 
     $results = @{}
 
-    $providerObjects = Get-Providers -Type Declarative
+    $providerObjects = Get-Managers -ConfigPath $ConfigPath
 
     $restrictedProviders = $Providers
     if ($Providers.Count -eq 0 -and $Config.ContainsKey('Providers')) {
@@ -532,7 +543,8 @@ function Invoke-Managers {
 
         $results[$name] = Invoke-Manager `
             -Provider $provider `
-            -Config $Config
+            -Config $Config `
+            -CommonParameters $CommonParameters
     }
 
     return $results
@@ -558,8 +570,8 @@ function Invoke-TriggerProvider {
     $path = $Provider.Path
 
     # Sandbox handling (triggers are non-idempotent)
-    if (Test-SandboxActive) {
-        $mode = Get-SandboxMode
+    if (Test-WinSpecSandboxActive) {
+        $mode = Get-WinSpecSandboxMode
         Write-Log -Level "INFO" -Message "Sandbox ($mode): Trigger '$name' would execute"
 
         $change = @{
@@ -582,7 +594,7 @@ function Invoke-TriggerProvider {
     }
 
     try {
-        $cmd = $module.ExportedCommands["Invoke-Trigger"]
+        $cmd = Get-ProviderExportedCommand -Module $module -Name "Invoke-Trigger"
 
         if (-not $cmd) {
             Write-Log -Level "ERROR" -Message "Trigger $name missing invoke function"
@@ -610,7 +622,8 @@ function Invoke-Triggers {
     param(
         $Config,
         $Triggers,
-        [string]$ConfigPath
+        [string]$ConfigPath,
+        [hashtable]$CommonParameters
     )
 
     $triggers = Resolve-Triggers `
@@ -618,7 +631,12 @@ function Invoke-Triggers {
         -UserTriggers $Triggers `
         -ConfigPath $ConfigPath
 
-    $commonParameters = Get-ForwardedCommonParameters -BoundParameters $PSBoundParameters
+    $commonParameters = if ($CommonParameters) {
+        $CommonParameters
+    }
+    else {
+        Get-ForwardedCommonParameters -BoundParameters $PSBoundParameters
+    }
 
     Write-Debug "Triggers: $($triggers | Out-String)"
     $results = @{}
@@ -641,6 +659,37 @@ function Invoke-Triggers {
 # =============================================================================
 # MAIN EXECUTION
 # =============================================================================
+
+function Get-ResultLogLevel {
+    param([string]$Status)
+
+    switch ($Status) {
+        "AlreadyInDesiredState" { "OK" }
+        "DryRun" { "INFO" }
+        "Error" { "ERROR" }
+        default { "APPLIED" }
+    }
+}
+
+function Write-WinSpecResultSummary {
+    param([hashtable]$Results)
+
+    Write-LogHeader "Push Results"
+    foreach ($name in $Results.Keys) {
+        if ($name -in @("Success", "Triggers")) { continue }
+        $result = $Results[$name]
+        $status = if ($result.Status) { $result.Status } else { "Completed" }
+        Write-Log -Level (Get-ResultLogLevel -Status $status) -Message "[$name]: $status"
+    }
+
+    if ($Results.ContainsKey("Triggers")) {
+        foreach ($triggerName in $Results.Triggers.Keys) {
+            $triggerResult = $Results.Triggers[$triggerName]
+            $status = if ($triggerResult.Status) { $triggerResult.Status } else { "Completed" }
+            Write-Log -Level (Get-ResultLogLevel -Status $status) -Message "[Trigger:$triggerName]: $status"
+        }
+    }
+}
 
 function Invoke-WinSpec {
     [CmdletBinding(SupportsShouldProcess)]
@@ -674,90 +723,26 @@ function Invoke-WinSpec {
         }
     }
 
+    $commonParameters = Get-ForwardedCommonParameters -BoundParameters $PSBoundParameters
+
     Write-LogSection -Name "Providers"
-    $results = Invoke-Managers -Config $Spec -Providers $Providers
+    $results = Invoke-Managers `
+        -Config $Spec `
+        -Providers $Providers `
+        -ConfigPath $ConfigPath `
+        -CommonParameters $commonParameters
+
     Write-LogSection -Name "Triggers"
-    $results["Triggers"] = Invoke-Triggers -Config $Spec -ConfigPath $ConfigPath -Triggers $Triggers
-
-    foreach ($provider in $results.Keys) {
-        $result = $results[$provider]
-        $status = if ($result.Status) { $result.Status } else { "Completed" }
-        $level = switch ($status) {
-            "AlreadyInDesiredState" { "OK" }
-            "DryRun" { "INFO" }
-            "Error" { "ERROR" }
-            default { "APPLIED" }
-        }
-
-        Write-LogHeader "Push Results"
-        Write-Log -Level $level -Message "[$provider]: $status"
-    }
+    $results["Triggers"] = Invoke-Triggers `
+        -Config $Spec `
+        -ConfigPath $ConfigPath `
+        -Triggers $Triggers `
+        -CommonParameters $commonParameters
 
     $results["Success"] = $true
+    Write-WinSpecResultSummary -Results $results
 
     return $results
-}
-
-# =============================================================================
-# DIFF OUTPUT FORMATTING
-# =============================================================================
-
-function ConvertTo-DisplayValue {
-    param($Value)
-    if ($null -eq $Value) { return '(null)' }
-    if ($Value -is [bool]) { return $Value.ToString().ToLower() }
-    return $Value.ToString()
-}
-
-function Format-DiffOutput {
-    [CmdletBinding()]
-    param([Parameter(Mandatory = $true)][hashtable]$Differences)
-    
-    $output = @()
-    $output += "`n=== STATE DIFFERENCES ===`n"
-    
-    # Added
-    $addedItems = if ($Differences.Added) { $Differences.Added } else { @() }
-    if ($addedItems.Count -gt 0) {
-        $output += "`n[+] ADDED (in config, not in system):"
-        foreach ($item in $addedItems) {
-            $output += "    $($item.Path)"
-            $output += "       Value: $(ConvertTo-DisplayValue $item.ConfigValue)"
-        }
-    }
-    
-    # Removed
-    $removedItems = if ($Differences.Removed) { $Differences.Removed } else { @() }
-    if ($removedItems.Count -gt 0) {
-        $output += "`n[-] REMOVED (in system, not in config):"
-        foreach ($item in $removedItems) {
-            $output += "    $($item.Path)"
-            $output += "       Current: $(ConvertTo-DisplayValue $item.SystemValue)"
-        }
-    }
-    
-    # Changed
-    $changedItems = if ($Differences.Changed) { $Differences.Changed } else { @() }
-    if ($changedItems.Count -gt 0) {
-        $output += "`n[~] CHANGED (different values):"
-        foreach ($item in $changedItems) {
-            $output += "    $($item.Path)"
-            $output += "       System:  $(ConvertTo-DisplayValue $item.SystemValue)"
-            $output += "       Config:  $(ConvertTo-DisplayValue $item.ConfigValue)"
-        }
-    }
-    
-    $equalCount = if ($Differences.Equal) { $Differences.Equal.Count } else { 0 }
-    if ($equalCount -gt 0) {
-        $output += "`n[=] EQUAL (matched): $equalCount items"
-    }
-    
-    $totalChanges = $addedItems.Count + $removedItems.Count + $changedItems.Count
-    $output += "`n---"
-    $output += "Summary: $($addedItems.Count) added, $($removedItems.Count) removed, $($changedItems.Count) changed, $equalCount equal"
-    $output += "`nTotal differences: $totalChanges"
-    
-    return $output -join "`n"
 }
 
 # =============================================================================
@@ -773,6 +758,9 @@ Export-ModuleMember -Function @(
     "Resolve-ProviderCommand"
     "Resolve-Triggers"
     "Get-ForwardedCommonParameters"
+    "Get-ProviderExportedCommand"
+    "Test-WinSpecSandboxActive"
+    "Get-WinSpecSandboxMode"
     # cache
     "Clear-SystemStateCache"
     # execution
@@ -786,7 +774,4 @@ Export-ModuleMember -Function @(
     # compare
     "Compare-ProviderState"
     "Compare-SystemState"
-    # diff output
-    "ConvertTo-DisplayValue"
-    "Format-DiffOutput"
 )

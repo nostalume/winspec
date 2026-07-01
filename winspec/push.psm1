@@ -6,6 +6,7 @@
 Import-Module (Join-Path $PSScriptRoot "registry-maps.psm1") -Force
 Import-Module (Join-Path $PSScriptRoot "logging.psm1") -Force
 Import-Module (Join-Path $PSScriptRoot "utils.psm1") -Force
+Import-Module (Join-Path $PSScriptRoot "state.psm1") -Force
 
 # =============================================================================
 # PUSH COMMAND - Apply config to system
@@ -19,7 +20,7 @@ function Invoke-Push {
         Applies a configuration spec to the system.
     #>
 
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess)]
     param(
         [Parameter(Mandatory = $false)]
         [hashtable]$Spec,
@@ -65,13 +66,16 @@ function Invoke-Push {
         Write-LogHeader "SANDBOX MODE: $sandboxMode"
     }
 
+    $commonParameters = Get-ForwardedCommonParameters -BoundParameters $PSBoundParameters
+
     # Execute spec
     $result = Invoke-WinSpec `
         -Spec $Spec `
         -ConfigPath $ConfigPath `
         -Providers $Providers `
         -Triggers $Triggers `
-        -Checkpoint:$Checkpoint
+        -Checkpoint:$Checkpoint `
+        @commonParameters
 
     if (-not $result.Success) {
         Write-Log -Level "ERROR" -Message "Push failed"

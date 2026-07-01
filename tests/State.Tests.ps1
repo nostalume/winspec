@@ -16,7 +16,8 @@ Describe "State Comparison" {
     Context "Compare-SystemState" {
         It "Should return flat diff hashtable with Added/Removed/Changed/Equal keys" {
             InModuleScope state {
-                Mock Get-Managers { return @() }
+                Mock Get-Managers { return @([PSCustomObject]@{ Name = "Registry"; Type = "Declarative"; Path = "registry.psm1" }) }
+                Mock Compare-ProviderState { return @() }
                 
                 $spec = @{
                     Registry = @{ Explorer = @{ ShowHidden = $true } }
@@ -42,7 +43,13 @@ Describe "State Comparison" {
         
         It "Should handle spec with multiple provider keys" {
             InModuleScope state {
-                Mock Get-Managers { return @() }
+                Mock Get-Managers {
+                    return @(
+                        [PSCustomObject]@{ Name = "Registry"; Type = "Declarative"; Path = "registry.psm1" },
+                        [PSCustomObject]@{ Name = "Feature"; Type = "Declarative"; Path = "feature.psm1" }
+                    )
+                }
+                Mock Compare-ProviderState { return @() }
                 
                 $spec = @{
                     Registry = @{ Explorer = @{ ShowHidden = $true } }
@@ -53,13 +60,35 @@ Describe "State Comparison" {
                 $result | Should -Not -BeNullOrEmpty
             }
         }
+
+        It "Should pass provider objects to provider comparison" {
+            InModuleScope state {
+                Mock Get-Managers {
+                    return @(
+                        [PSCustomObject]@{ Name = "Registry"; Type = "Declarative"; Path = "registry.psm1" }
+                    )
+                }
+                Mock Compare-ProviderState {
+                    $script:seenProvider = $Provider
+                    return @()
+                }
+
+                $result = Compare-SystemState `
+                    -Spec @{ Registry = @{ Explorer = @{ ShowHidden = $true } } } `
+                    -Against @{ Registry = @{ Explorer = @{ ShowHidden = $false } } }
+
+                $result | Should -Not -BeNullOrEmpty
+                $script:seenProvider.Name | Should -Be "Registry"
+                $script:seenProvider.Path | Should -Be "registry.psm1"
+            }
+        }
     }
 }
 
 Describe "Diff Output" {
     Context "Format-DiffOutput" {
         It "Should format added items" {
-            InModuleScope state {
+            InModuleScope diff {
                 $diff = @{
                     Added = @(
                         @{ Path = "Registry.Explorer.ShowHidden"; ConfigValue = $true; SystemValue = $null }
@@ -77,7 +106,7 @@ Describe "Diff Output" {
         }
         
         It "Should format changed items" {
-            InModuleScope state {
+            InModuleScope diff {
                 $diff = @{
                     Added   = @()
                     Changed = @(
@@ -94,7 +123,7 @@ Describe "Diff Output" {
         }
         
         It "Should format removed items" {
-            InModuleScope state {
+            InModuleScope diff {
                 $diff = @{
                     Added   = @()
                     Changed = @()
@@ -111,7 +140,7 @@ Describe "Diff Output" {
         }
         
         It "Should format mixed changes" {
-            InModuleScope state {
+            InModuleScope diff {
                 $diff = @{
                     Added = @(
                         @{ Path = "Registry.Explorer.NewValue"; ConfigValue = $true; SystemValue = $null }
@@ -190,6 +219,29 @@ Describe "State Export" {
                 
                 $result = Get-SystemState -Providers @("Registry") -NoCache
                 $result | Should -Not -BeNullOrEmpty
+            }
+        }
+
+        It "Should not reuse state across different provider filters" {
+            InModuleScope state {
+                Mock Get-Managers {
+                    return @(
+                        [PSCustomObject]@{ Name = "Registry"; Type = "Declarative"; Path = "registry.psm1" },
+                        [PSCustomObject]@{ Name = "Feature"; Type = "Declarative"; Path = "feature.psm1" }
+                    )
+                }
+                Mock Export-ProviderState {
+                    if ($Provider.Name -eq "Registry") { return @{ Marker = "registry" } }
+                    if ($Provider.Name -eq "Feature") { return @{ Marker = "feature" } }
+                }
+
+                $first = Get-SystemState -Providers @("Registry")
+                $second = Get-SystemState -Providers @("Feature")
+
+                $first.ContainsKey("Registry") | Should -BeTrue
+                $first.ContainsKey("Feature") | Should -BeFalse
+                $second.ContainsKey("Feature") | Should -BeTrue
+                $second.ContainsKey("Registry") | Should -BeFalse
             }
         }
     }

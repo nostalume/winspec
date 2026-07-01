@@ -698,6 +698,7 @@ switch ($Command) {
         }
         if ($Against) { $diffParams['Against'] = $againstContent }
         if ($Providers) { $diffParams['Providers'] = $Providers }
+        if ($ConfigPath) { $diffParams['ConfigPath'] = $ConfigPath }
         
         Import-Module (Join-Path $Script:WinspecRoot "diff.psm1") -Force
         Invoke-Diff @diffParams
