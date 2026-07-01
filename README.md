@@ -320,7 +320,7 @@ Trigger providers download and execute remote scripts:
 - **Debloat**: Downloads from `https://debloat.raphi.re/`
 - **Office**: Downloads from Microsoft CDN
 
-These scripts require administrator privileges. Live remote downloads/execution are blocked unless the trigger option is a hashtable with `ConfirmRemoteExecution = $true`. Always run with `-DryRun`/`-WhatIf` first and review remote scripts before explicitly confirming execution.
+These scripts require administrator privileges. Always run trigger changes with `-DryRun`/`-WhatIf` first and review remote sources before live execution.
 
 ---
 

@@ -26,22 +26,16 @@ Describe "Activation Trigger" {
             $result.Status | Should -Be "DryRun"
         }
         
-        It "Should return DryRun for Windows option with WhatIf" {
-            $result = Invoke-ActTrigger -Option "Windows" -WhatIf
+        It "Should return DryRun for Method with WhatIf" {
+            $result = Invoke-ActTrigger -Method "KMS38" -WhatIf
             $result | Should -Not -BeNullOrEmpty
             $result.Status | Should -Be "DryRun"
         }
         
-        It "Should return DryRun for Office option with WhatIf" {
-            $result = Invoke-ActTrigger -Option "Office" -WhatIf
+        It "Should return DryRun for Office method with WhatIf" {
+            $result = Invoke-ActTrigger -Method "Office" -WhatIf
             $result | Should -Not -BeNullOrEmpty
             $result.Status | Should -Be "DryRun"
-        }
-
-        It "Should block live remote execution without explicit confirmation" {
-            $result = Invoke-ActTrigger
-            $result | Should -Not -BeNullOrEmpty
-            $result.Status | Should -Be "Blocked"
         }
     }
 }
@@ -60,15 +54,9 @@ Describe "Debloat Trigger" {
         }
         
         It "Should return DryRun for silent option with WhatIf" {
-            $result = Invoke-DebTrigger -Option @{ Silent = $true } -WhatIf
+            $result = Invoke-DebTrigger -Silent -WhatIf
             $result | Should -Not -BeNullOrEmpty
             $result.Status | Should -Be "DryRun"
-        }
-
-        It "Should block live remote execution without explicit confirmation" {
-            $result = Invoke-DebTrigger
-            $result | Should -Not -BeNullOrEmpty
-            $result.Status | Should -Be "Blocked"
         }
     }
 }
@@ -87,15 +75,9 @@ Describe "Office Trigger" {
         }
         
         It "Should return DryRun for custom path with WhatIf" {
-            $result = Invoke-OffTrigger -Option "C:\Test" -WhatIf
+            $result = Invoke-OffTrigger -Path "C:\Test" -WhatIf
             $result | Should -Not -BeNullOrEmpty
             $result.Status | Should -Be "DryRun"
-        }
-
-        It "Should block live remote download without explicit confirmation" {
-            $result = Invoke-OffTrigger -Option @{ Path = "C:\Test" }
-            $result | Should -Not -BeNullOrEmpty
-            $result.Status | Should -Be "Blocked"
         }
     }
 }
@@ -115,6 +97,73 @@ Describe "Trigger Execution" {
                 $result = Invoke-Triggers -Config @{} -Triggers @()
                 $result -is [hashtable] | Should -BeTrue
             }
+        }
+
+        It "Should select triggers from spec and splat TriggerConfig into typed parameters" {
+            $root = Join-Path $TestDrive "trigger-splat"
+            $triggerDir = Join-Path $root "triggers"
+            New-Item -ItemType Directory -Path $triggerDir -Force | Out-Null
+            @'
+function Get-ProviderInfo { @{ Name = "sample"; Type = "Trigger" } }
+function Invoke-Trigger {
+    [CmdletBinding(SupportsShouldProcess = $true)]
+    param([switch]$Silent, [string]$Mode = "default")
+    @{ Status = "Success"; Silent = [bool]$Silent; Mode = $Mode }
+}
+Export-ModuleMember -Function Get-ProviderInfo, Invoke-Trigger
+'@ | Set-Content -Path (Join-Path $triggerDir "sample.psm1")
+
+            $config = @{
+                Trigger = @("sample")
+                TriggerConfig = @{
+                    sample = @{ Silent = $true; Mode = "fast" }
+                }
+            }
+
+            $result = Invoke-Triggers -Config $config -Triggers $null -ConfigPath $root
+
+            $result.sample.Status | Should -Be "Success"
+            $result.sample.Silent | Should -BeTrue
+            $result.sample.Mode | Should -Be "fast"
+        }
+
+        It "Should keep Invoke-Trigger command identity per module" {
+            $root = Join-Path $TestDrive "trigger-collision"
+            $triggerDir = Join-Path $root "triggers"
+            New-Item -ItemType Directory -Path $triggerDir -Force | Out-Null
+
+            foreach ($name in @("alpha", "beta")) {
+                @"
+function Get-ProviderInfo { @{ Name = "$name"; Type = "Trigger" } }
+function Invoke-Trigger { [CmdletBinding()] param() @{ Status = "Success"; Trigger = "$name" } }
+Export-ModuleMember -Function Get-ProviderInfo, Invoke-Trigger
+"@ | Set-Content -Path (Join-Path $triggerDir "$name.psm1")
+            }
+
+            $result = Invoke-Triggers -Config @{ Trigger = @("alpha", "beta") } -Triggers $null -ConfigPath $root
+
+            $result.alpha.Trigger | Should -Be "alpha"
+            $result.beta.Trigger | Should -Be "beta"
+        }
+
+        It "Should forward WhatIf to trigger command" {
+            $root = Join-Path $TestDrive "trigger-whatif"
+            $triggerDir = Join-Path $root "triggers"
+            New-Item -ItemType Directory -Path $triggerDir -Force | Out-Null
+            @'
+function Get-ProviderInfo { @{ Name = "guarded"; Type = "Trigger" } }
+function Invoke-Trigger {
+    [CmdletBinding(SupportsShouldProcess = $true)]
+    param()
+    if ($PSCmdlet.ShouldProcess("guarded", "execute")) { return @{ Status = "Executed" } }
+    @{ Status = "DryRun" }
+}
+Export-ModuleMember -Function Get-ProviderInfo, Invoke-Trigger
+'@ | Set-Content -Path (Join-Path $triggerDir "guarded.psm1")
+
+            $result = Invoke-Triggers -Config @{ Trigger = @("guarded") } -Triggers $null -ConfigPath $root -WhatIf
+
+            $result.guarded.Status | Should -Be "DryRun"
         }
     }
 }

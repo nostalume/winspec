@@ -142,7 +142,7 @@ A trigger should export:
 
 ```powershell
 function Get-ProviderInfo { ... }
-function Invoke-Trigger { param($Option = $true) ... }
+function Invoke-Trigger { param(<typed trigger parameters>) ... }
 ```
 
 Common result shape:

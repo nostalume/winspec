@@ -476,7 +476,10 @@ function Get-ProviderInfo {
 
 function Invoke-Trigger {
     [CmdletBinding(SupportsShouldProcess = $true)]
-    param($Option = $true)
+    param(
+        [switch]$ExampleFlag,
+        [string]$Mode = "default"
+    )
 
     return @{
         Status = "Success"

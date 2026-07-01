@@ -153,15 +153,12 @@ function Resolve-Triggers {
     $providers = Get-Triggers -ConfigPath $ConfigPath
     $resolved = @()
 
-    # read config triggers
-    $configTriggers = @{}
-    if ($Config.Trigger) {
-        $configTriggers = $Config.Trigger
-    }
-
     # determine execution set
     if (-not $UserTriggers) {
-        return $resolved
+        if (-not $Config -or -not $Config.ContainsKey("Trigger")) {
+            return $resolved
+        }
+        $names = $Config.Trigger
     }
     elseif ($UserTriggers -eq "*") {
         $names = $providers.Name
@@ -176,32 +173,50 @@ function Resolve-Triggers {
     $providerMap = @{}
     foreach ($p in $providers) {
         $providerMap[$p.Name] = $p
+        $providerMap[$p.Name.ToString().ToLowerInvariant()] = $p
     }
     foreach ($name in $names) {
-        $provider = $providerMap["$name"]
+        $lookupName = "$name"
+        $provider = $providerMap[$lookupName]
+        if (-not $provider) {
+            $provider = $providerMap[$lookupName.ToLowerInvariant()]
+        }
         if (-not $provider) {
             Write-Log -Level ERROR -Message "Trigger not found: $name"
             continue
         }
 
-        $value = $true
-
-        if ($configTriggers.ContainsKey($name)) {
-            $value = $configTriggers[$name]
-        }
-
-        if ($UserTriggers -is [hashtable] -and $UserTriggers.ContainsKey($name)) {
-            $value = $UserTriggers[$name]
+        $value = @{}
+        if ($Config -and $Config.ContainsKey("TriggerConfig") -and $Config.TriggerConfig -is [hashtable]) {
+            if ($Config.TriggerConfig.ContainsKey($lookupName)) {
+                $value = $Config.TriggerConfig[$lookupName]
+            }
+            elseif ($Config.TriggerConfig.ContainsKey($provider.Name)) {
+                $value = $Config.TriggerConfig[$provider.Name]
+            }
         }
 
         $resolved += [pscustomobject]@{
-            Name     = $name
+            Name     = $provider.Name
             Provider = $provider
             Value    = $value
         }
     }
 
     return $resolved
+}
+
+function Get-ForwardedCommonParameters {
+    [CmdletBinding()]
+    param([hashtable]$BoundParameters)
+
+    $common = @{}
+    foreach ($name in @("WhatIf", "Confirm", "Verbose", "Debug", "ErrorAction", "WarningAction", "InformationAction")) {
+        if ($BoundParameters.ContainsKey($name)) {
+            $common[$name] = $BoundParameters[$name]
+        }
+    }
+    return $common
 }
 
 function Resolve-ProviderList {
@@ -534,7 +549,9 @@ function Invoke-TriggerProvider {
         [Parameter(Mandatory)]
         [pscustomobject]$Provider,
 
-        $Value
+        [hashtable]$Value = @{},
+
+        [hashtable]$CommonParameters = @{}
     )
 
     $name = $Provider.Name
@@ -572,14 +589,12 @@ function Invoke-TriggerProvider {
             return @{ Status = "Error"; Message = "Missing trigger function" }
         }
 
-        if ($PSCmdlet.ShouldProcess($name, "Execute trigger")) {
-            try {
-                return & $cmd -Option $Value
-            }
-            catch {
-                Write-Log -Level "ERROR" -Message "Trigger $name failed: $_"
-                return @{ Status = "Error"; Message = $_.Exception.Message }
-            }
+        try {
+            return & $cmd @Value @CommonParameters
+        }
+        catch {
+            Write-Log -Level "ERROR" -Message "Trigger $name failed: $_"
+            return @{ Status = "Error"; Message = $_.Exception.Message }
         }
     }
     finally {
@@ -603,6 +618,8 @@ function Invoke-Triggers {
         -UserTriggers $Triggers `
         -ConfigPath $ConfigPath
 
+    $commonParameters = Get-ForwardedCommonParameters -BoundParameters $PSBoundParameters
+
     Write-Debug "Triggers: $($triggers | Out-String)"
     $results = @{}
 
@@ -613,7 +630,8 @@ function Invoke-Triggers {
 
         $results[$name] = Invoke-TriggerProvider `
             -Provider $provider `
-            -Value $value
+            -Value $value `
+            -CommonParameters $commonParameters
     }
 
     return $results
@@ -754,6 +772,7 @@ Export-ModuleMember -Function @(
     "Resolve-ProviderList"
     "Resolve-ProviderCommand"
     "Resolve-Triggers"
+    "Get-ForwardedCommonParameters"
     # cache
     "Clear-SystemStateCache"
     # execution

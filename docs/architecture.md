@@ -145,10 +145,10 @@ A trigger module must expose:
 
 ```powershell
 function Get-ProviderInfo { ... }
-function Invoke-Trigger { param($Option = $true) ... }
+function Invoke-Trigger { param(<typed trigger parameters>) ... }
 ```
 
-`Invoke-Trigger` receives the resolved value from the spec or command line and returns a status hashtable.
+`Invoke-Trigger` receives typed parameters from `TriggerConfig.<name>` and returns a status hashtable.
 
 ### Result contract
 

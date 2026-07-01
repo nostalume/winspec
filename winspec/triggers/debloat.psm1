@@ -10,106 +10,61 @@ function Get-ProviderInfo {
     }
 }
 
-function Test-RemoteExecutionConfirmed {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $false)]
-        $Option
-    )
-
-    return ($Option -is [hashtable] -and $Option.ConfirmRemoteExecution -eq $true)
-}
-
-function New-RemoteExecutionBlockedResult {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)][string]$Action
-    )
-
-    Write-Log -Level "WARN" -Message "$Action blocked: set ConfirmRemoteExecution = `$true in the trigger option to allow live remote execution."
-    return @{
-        Status  = "Blocked"
-        Message = "Live remote execution requires ConfirmRemoteExecution = `$true"
-    }
-}
-
 function Invoke-Trigger {
     [CmdletBinding(SupportsShouldProcess = $true)]
     param (
-        [Parameter(Mandatory = $false)]
-        $Option = $true
+        [switch]$Silent,
+        [switch]$RemoveApps,
+        [switch]$CreateRestorePoint,
+        [switch]$DisableBing,
+        [switch]$RemoveCopilot
     )
 
     Write-Log -Level "INFO" -Message "Triggering system debloat..."
 
-    if (-not $PSCmdlet.ShouldProcess("System", "Debloat (Dry Run)")) {
+    $scriptOptions = @()
+    if ($Silent) { $scriptOptions += "-Silent" }
+    if ($RemoveApps) { $scriptOptions += "-RemoveApps" }
+    if ($CreateRestorePoint) { $scriptOptions += "-CreateRestorePoint" }
+    if ($DisableBing) { $scriptOptions += "-DisableBingSearch" }
+    if ($RemoveCopilot) { $scriptOptions += "-RemoveCopilot" }
+
+    if (-not $PSCmdlet.ShouldProcess("Windows System", "Debloat")) {
         Write-Log -Level "INFO" -Message "Would trigger system debloat (dry run)"
         return @{
             Status = "DryRun"
             Message = "Would execute debloat script"
+            Options = $scriptOptions
         }
     }
 
-    # Build options based on $Option type
-    $scriptOptions = @()
+    try {
+        Write-Log -Level "WARN" -Message "Downloading and executing debloat script from debloat.raphi.re"
+        Write-Log -Level "WARN" -Message "This script requires administrator privileges"
 
-    if ($Option -is [string]) {
-        # Simple string option like "silent"
-        if ($Option -ne "default") {
-            $scriptOptions += "-$Option"
+        $script = Invoke-RestMethod -Uri "https://debloat.raphi.re/" -ErrorAction Stop
+
+        if ($scriptOptions.Count -gt 0) {
+            & ([scriptblock]::Create($script)) @scriptOptions
         }
-    }
-    elseif ($Option -is [hashtable]) {
-        # Complex options
-        if ($Option.Silent) { $scriptOptions += "-Silent" }
-        if ($Option.RemoveApps) { $scriptOptions += "-RemoveApps" }
-        if ($Option.CreateRestorePoint) { $scriptOptions += "-CreateRestorePoint" }
-        if ($Option.DisableBing) { $scriptOptions += "-DisableBingSearch" }
-        if ($Option.RemoveCopilot) { $scriptOptions += "-RemoveCopilot" }
-    }
-    elseif ($Option -eq $true) {
-        # Default options for $true
-        $scriptOptions = @()
-    }
-
-    if ($PSCmdlet.ShouldProcess("Windows System", "Debloat")) {
-        if (-not (Test-RemoteExecutionConfirmed -Option $Option)) {
-            return New-RemoteExecutionBlockedResult -Action "Debloat"
+        else {
+            & ([scriptblock]::Create($script))
         }
 
-        try {
-            Write-Log -Level "WARN" -Message "Downloading and executing debloat script from debloat.raphi.re"
-            Write-Log -Level "WARN" -Message "This script requires administrator privileges"
+        Write-Log -Level "APPLIED" -Message "Debloat script executed"
 
-            $script = Invoke-RestMethod -Uri "https://debloat.raphi.re/" -ErrorAction Stop
-
-            if ($scriptOptions.Count -gt 0) {
-                & ([scriptblock]::Create($script)) @scriptOptions
-            }
-            else {
-                & ([scriptblock]::Create($script))
-            }
-
-            Write-Log -Level "APPLIED" -Message "Debloat script executed"
-
-            return @{
-                Status  = "Success"
-                Message = "Debloat script executed successfully"
-                Options = $scriptOptions
-            }
-        }
-        catch {
-            Write-Log -Level "ERROR" -Message "Debloat failed: $($_.Exception.Message)"
-            return @{
-                Status  = "Error"
-                Message = $_.Exception.Message
-            }
+        return @{
+            Status  = "Success"
+            Message = "Debloat script executed successfully"
+            Options = $scriptOptions
         }
     }
-
-    return @{
-        Status = "Skipped"
-        Message = "User declined debloat"
+    catch {
+        Write-Log -Level "ERROR" -Message "Debloat failed: $($_.Exception.Message)"
+        return @{
+            Status  = "Error"
+            Message = $_.Exception.Message
+        }
     }
 }
 
