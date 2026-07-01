@@ -19,6 +19,7 @@ $Script:SpecSchema = @{
     Service     = @{ Type = "hashtable"; Required = $false }
     Feature     = @{ Type = "hashtable"; Required = $false }
     Trigger     = @{ Type = "array"; Required = $false }
+    TriggerConfig = @{ Type = "hashtable"; Required = $false }
 }
 
 function Get-SpecSchema {
@@ -116,21 +117,39 @@ function Test-SpecSchema {
         }
     }
     
-    # Validate Trigger structure
-    if ($Spec.Trigger) {
-        # Check if Trigger is an array
-        if ($Spec.Trigger -isnot [array]) {
-            $errors += "Trigger must be an array of hashtables"
+    # Validate Trigger selection and TriggerConfig parameter maps
+    if ($Spec.ContainsKey("Trigger")) {
+        $triggerSelection = $Spec.Trigger
+        if ($triggerSelection -is [string]) {
+            if ([string]::IsNullOrWhiteSpace($triggerSelection)) {
+                $errors += "Trigger names must not be empty"
+            }
+        }
+        elseif ($triggerSelection -is [array]) {
+            foreach ($triggerName in $triggerSelection) {
+                if ($triggerName -isnot [string] -or [string]::IsNullOrWhiteSpace($triggerName)) {
+                    $errors += "Trigger must be a string or an array of trigger-name strings"
+                    break
+                }
+            }
         }
         else {
-            foreach ($trigger in $Spec.Trigger) {
-                # Check each trigger entry is a hashtable with Name field
-                if ($trigger -isnot [hashtable]) {
-                    $errors += "Each trigger entry must be a hashtable"
+            $errors += "Trigger must be a string or an array of trigger-name strings"
+        }
+    }
+
+    if ($Spec.ContainsKey("TriggerConfig")) {
+        if ($Spec.TriggerConfig -isnot [hashtable]) {
+            $errors += "TriggerConfig must be a hashtable keyed by trigger name"
+        }
+        else {
+            foreach ($triggerName in $Spec.TriggerConfig.Keys) {
+                if ([string]::IsNullOrWhiteSpace([string]$triggerName)) {
+                    $errors += "TriggerConfig keys must be non-empty trigger names"
                     continue
                 }
-                if (-not $trigger.Name) {
-                    $errors += "Each trigger entry must have a 'Name' field"
+                if ($Spec.TriggerConfig[$triggerName] -isnot [hashtable]) {
+                    $errors += "TriggerConfig '$triggerName' must be a hashtable of Invoke-Trigger parameters"
                 }
             }
         }

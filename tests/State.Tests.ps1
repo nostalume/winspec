@@ -282,5 +282,41 @@ Describe "State Validation" {
             $result = Test-SpecSchema -Spec $spec
             $result | Should -BeTrue
         }
+
+        It "Should accept Trigger selection with separate TriggerConfig parameters" {
+            $spec = @{
+                Trigger = @("activation", "debloat")
+                TriggerConfig = @{
+                    activation = @{ Method = "KMS38" }
+                    debloat    = @{ Silent = $true }
+                }
+            }
+
+            $result = Test-SpecSchema -Spec $spec
+            $result | Should -BeTrue
+        }
+
+        It "Should reject mixed trigger parameter maps inside Trigger selection" {
+            $spec = @{
+                Trigger = @{
+                    activation = @{ Method = "KMS38" }
+                }
+            }
+
+            $result = Test-SpecSchema -Spec $spec
+            $result | Should -BeFalse
+        }
+
+        It "Should reject non-hashtable TriggerConfig entries" {
+            $spec = @{
+                Trigger = @("debloat")
+                TriggerConfig = @{
+                    debloat = "silent"
+                }
+            }
+
+            $result = Test-SpecSchema -Spec $spec
+            $result | Should -BeFalse
+        }
     }
 }

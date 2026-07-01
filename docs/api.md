@@ -273,10 +273,12 @@ A spec is a PowerShell file that returns a hashtable:
         wuauserv = @{ State = "stopped"; Startup = "disabled" }
     }
 
-    Trigger = @{
-        activation = $true
-        debloat    = "silent"
-        office     = "C:\Installers"
+    Trigger = @("activation", "debloat", "office")
+
+    TriggerConfig = @{
+        activation = @{ Method = "KMS38" }
+        debloat    = @{ Silent = $true }
+        office     = @{ Path = "C:\Installers"; Cache = $true }
     }
 }
 ```
@@ -292,7 +294,8 @@ A spec is a PowerShell file that returns a hashtable:
 | `Registry` | hashtable | Registry category/property state. |
 | `Feature` | hashtable | Windows Optional Feature state. |
 | `Service` | hashtable | Windows service state and startup mode. |
-| `Trigger` | hashtable or array | Explicit non-idempotent actions and values. |
+| `Trigger` | string or array | Explicit non-idempotent action names to run. |
+| `TriggerConfig` | hashtable | Parameter maps keyed by trigger name. |
 
 Omit sections you do not want WinSpec to manage.
 
@@ -386,27 +389,29 @@ Fields:
 
 See [reference.md](reference.md#service) for service values and discovery commands.
 
-### `Trigger`
+### `Trigger` and `TriggerConfig`
 
-Defines explicit non-idempotent actions.
+`Trigger` selects explicit non-idempotent actions. `TriggerConfig` configures those actions with parameter maps keyed by trigger name.
 
 ```powershell
-Trigger = @{
-    activation = @{ Method = "KMS38"; ConfirmRemoteExecution = $true }
-    debloat    = @{ Silent = $true; ConfirmRemoteExecution = $true }
-    office     = @{ Path = "C:\Installers"; Cache = $true; ConfirmRemoteExecution = $true }
+Trigger = @("activation", "debloat", "office")
+
+TriggerConfig = @{
+    activation = @{ Method = "KMS38" }
+    debloat    = @{ Silent = $true }
+    office     = @{ Path = "C:\Installers"; Cache = $true }
 }
 ```
 
 Built-in triggers:
 
-| Trigger | Value | Behavior |
+| Trigger | Config parameters | Behavior |
 | --- | --- | --- |
-| `activation` | hashtable with optional `Method`; live mode requires `ConfirmRemoteExecution = $true` | Windows/Office activation helper. |
-| `debloat` | hashtable/string options; live mode requires `ConfirmRemoteExecution = $true` | Debloat helper. |
-| `office` | hashtable with `Path`/`Cache`; live mode requires `ConfirmRemoteExecution = $true` | Office installer download/setup helper. |
+| `activation` | `Method` | Windows/Office activation helper. |
+| `debloat` | `Silent` | Debloat helper. |
+| `office` | `Path`, `Cache` | Office installer download/setup helper. |
 
-Security note: remote triggers are blocked in live mode unless their option has `ConfirmRemoteExecution = $true`. Use `-WhatIf`/dry-run first, review remote sources, and only set the confirmation field when you intend to download or execute remote code.
+Security note: remote/download triggers must stay opt-in and respect native PowerShell execution controls such as `-WhatIf`/dry-run. Runtime confirmation belongs to command execution, not to stored trigger config.
 
 ---
 

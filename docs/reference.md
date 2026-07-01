@@ -55,7 +55,8 @@ A specification is a PowerShell `.ps1` file that returns a hashtable.
 | `Registry` | hashtable | No | Registry category/property state. |
 | `Service` | hashtable | No | Windows service state/startup config. |
 | `Feature` | hashtable | No | Windows Optional Feature state. |
-| `Trigger` | hashtable/array | No | Explicit non-idempotent trigger requests. |
+| `Trigger` | string/array | No | Explicit non-idempotent trigger names to run. |
+| `TriggerConfig` | hashtable | No | Trigger parameter maps keyed by trigger name. |
 
 Minimal example:
 
@@ -285,27 +286,29 @@ Common services:
 | `WSearch` | Windows Search |
 | `BITS` | Background Intelligent Transfer Service |
 
-### Trigger
+### Trigger and TriggerConfig
 
-`Trigger` config supplies values for explicitly selected trigger actions.
+`Trigger` selects explicit non-idempotent actions. `TriggerConfig` supplies parameters for each selected trigger.
 
 ```powershell
-Trigger = @{
-    activation = @{ Method = "KMS38"; ConfirmRemoteExecution = $true }
-    debloat    = @{ Silent = $true; ConfirmRemoteExecution = $true }
-    office     = @{ Path = "C:\Installers"; Cache = $true; ConfirmRemoteExecution = $true }
+Trigger = @("activation", "debloat", "office")
+
+TriggerConfig = @{
+    activation = @{ Method = "KMS38" }
+    debloat    = @{ Silent = $true }
+    office     = @{ Path = "C:\Installers"; Cache = $true }
 }
 ```
 
 Built-in triggers:
 
-| Trigger | Value | Notes |
+| Trigger | Config parameters | Notes |
 | --- | --- | --- |
-| `activation` | hashtable with optional `Method`; live mode requires `ConfirmRemoteExecution = $true` | Activation helper; may download/execute remote script. |
-| `debloat` | hashtable/string options; live mode requires `ConfirmRemoteExecution = $true` | Debloat helper; may download/execute remote script. |
-| `office` | hashtable with `Path`/`Cache`; live mode requires `ConfirmRemoteExecution = $true` | Office installer helper. |
+| `activation` | `Method` | Activation helper; may download/execute remote script. |
+| `debloat` | `Silent` | Debloat helper; may download/execute remote script. |
+| `office` | `Path`, `Cache` | Office installer helper. |
 
-Live remote downloads/execution return `Status = "Blocked"` unless the trigger option is a hashtable with `ConfirmRemoteExecution = $true`. `-WhatIf` remains available for dry-run previews without this confirmation.
+Live remote/download actions must stay opt-in and respect native PowerShell execution controls such as `-WhatIf`/dry-run. Runtime confirmation belongs to command execution, not to stored trigger config.
 
 ---
 
