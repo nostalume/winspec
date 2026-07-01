@@ -12,6 +12,19 @@ Import-Module (Join-Path $PSScriptRoot "state.psm1") -Force
 # PUSH COMMAND - Apply config to system
 # =============================================================================
 
+function Format-SandboxChangeSummary {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Change)
+
+    $status = $null
+    if ($Change.Details -and $Change.Details.Status) { $status = $Change.Details.Status }
+    elseif ($Change.Data -and $Change.Data.Status) { $status = $Change.Data.Status }
+    elseif ($Change.Details -and $Change.Details.Changed) { $status = "Changed" }
+    else { $status = "Recorded" }
+
+    return "$($Change.Provider): $status"
+}
+
 function Invoke-Push {
     <#
     .SYNOPSIS
@@ -68,40 +81,44 @@ function Invoke-Push {
 
     $commonParameters = Get-ForwardedCommonParameters -BoundParameters $PSBoundParameters
 
-    # Execute spec
-    $result = Invoke-WinSpec `
-        -Spec $Spec `
-        -ConfigPath $ConfigPath `
-        -Providers $Providers `
-        -Triggers $Triggers `
-        -Checkpoint:$Checkpoint `
-        @commonParameters
+    try {
+        # Execute spec
+        $result = Invoke-WinSpec `
+            -Spec $Spec `
+            -ConfigPath $ConfigPath `
+            -Providers $Providers `
+            -Triggers $Triggers `
+            -Checkpoint:$Checkpoint `
+            @commonParameters
 
-    if (-not $result.Success) {
-        Write-Log -Level "ERROR" -Message "Push failed"
-    }
+        if (-not $result.Success) {
+            Write-Log -Level "ERROR" -Message "Push failed"
+            return $result
+        }
 
-    # Show sandbox summary
-    if (Test-SandboxActive) {
-        $changes = Get-SandboxChanges
-        if ($changes.Count -gt 0) {
-            Write-Host ""
-            Write-Host "=== Sandbox Changes Summary ===" -ForegroundColor Cyan
+        # Show sandbox summary
+        if (Test-SandboxActive) {
+            $changes = Get-SandboxChanges
+            if ($changes.Count -gt 0) {
+                Write-Host ""
+                Write-Host "=== Sandbox Changes Summary ===" -ForegroundColor Cyan
 
-            foreach ($change in $changes) {
-                Write-Host "$($change.Provider): $($change.Details.Status)"
+                foreach ($change in $changes) {
+                    Write-Host (Format-SandboxChangeSummary -Change $change)
+                }
             }
         }
-    }
 
-    # Exit sandbox only if we created it
-    if ($enteredSandbox) {
-        Exit-Sandbox -DiscardChanges:($sandboxMode -eq "DryRun")
+        Write-Host ""
+        Write-Log -Level "OK" -Message "Push completed successfully"
+        return $result
     }
-
-    Write-Host ""
-    Write-Log -Level "OK" -Message "Push completed successfully"
-    return $result
+    finally {
+        # Exit sandbox only if we created it
+        if ($enteredSandbox) {
+            Exit-Sandbox -DiscardChanges:($sandboxMode -eq "DryRun")
+        }
+    }
 }
 
 Export-ModuleMember -Function @(

@@ -290,6 +290,59 @@ Describe "Retired state cache API" {
     }
 }
 
+
+Describe "WinSpec Execution Results" {
+    It "Should mark execution unsuccessful when a provider reports Error" {
+        InModuleScope state {
+            Mock Test-SpecSchema { $true }
+            Mock Invoke-Managers { @{ Registry = @{ Status = "Error"; Reason = "Boom" } } }
+            Mock Invoke-Triggers { @{} }
+            Mock Write-WinSpecResultSummary { }
+            Mock Write-LogHeader { }
+            Mock Write-Log { }
+            Mock Write-LogSection { }
+
+            $result = Invoke-WinSpec -Spec @{ Registry = @{ Explorer = @{ ShowHidden = $true } } }
+
+            $result.Success | Should -BeFalse
+        }
+    }
+
+    It "Should mark execution unsuccessful when a trigger reports Error" {
+        InModuleScope state {
+            Mock Test-SpecSchema { $true }
+            Mock Invoke-Managers { @{} }
+            Mock Invoke-Triggers { @{ debloat = @{ Status = "Error"; Message = "bad" } } }
+            Mock Write-WinSpecResultSummary { }
+            Mock Write-LogHeader { }
+            Mock Write-Log { }
+            Mock Write-LogSection { }
+
+            $result = Invoke-WinSpec -Spec @{ Trigger = @("debloat") }
+
+            $result.Success | Should -BeFalse
+        }
+    }
+
+    It "Should not apply providers when requested checkpoint fails" {
+        InModuleScope state {
+            Mock Test-SpecSchema { $true }
+            Mock New-Checkpoint { @{ Success = $false; Reason = "RequiresAdministrator" } }
+            Mock Invoke-Managers { throw "Invoke-Managers should not run when checkpoint fails" }
+            Mock Invoke-Triggers { throw "Invoke-Triggers should not run when checkpoint fails" }
+            Mock Write-LogHeader { }
+            Mock Write-Log { }
+            Mock Write-LogSection { }
+
+            $result = Invoke-WinSpec -Spec @{ Registry = @{ Explorer = @{ ShowHidden = $true } } } -Checkpoint
+
+            $result.Success | Should -BeFalse
+            $result.Reason | Should -Be "CheckpointFailed"
+            $result.Checkpoint.Reason | Should -Be "RequiresAdministrator"
+        }
+    }
+}
+
 Describe "State Validation" {
     Context "Test-SpecSchema" {
         It "Should return true for valid spec with known keys" {

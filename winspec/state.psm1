@@ -46,10 +46,10 @@ function Get-Providers {
         [string]$Type
     )
 
-    $results = @()
+    $results = [System.Collections.Generic.List[object]]::new()
     if (-not (Test-Path $BasePath)) {
         Write-Verbose "Provider base path not found: $BasePath"
-        return $results
+        return @($results)
     }
 
     # Resolve which directories to scan
@@ -79,11 +79,13 @@ function Get-Providers {
 
                 if ($null -ne $info -and $info.Name) {
 
-                    $results += [PSCustomObject]@{
-                        Type = $info.Type
-                        Name = $info.Name
-                        Path = $file.FullName
-                    }
+                    $results.Add([PSCustomObject]@{
+                        Type     = $info.Type
+                        Name     = $info.Name
+                        Path     = $file.FullName
+                        Module   = $module
+                        Commands = $module.ExportedCommands
+                    })
 
                     Write-Verbose "Discovered provider: $($info.Name) ($($info.Type))"
                 }
@@ -94,31 +96,33 @@ function Get-Providers {
         }
     }
 
-    return $results
+    return @($results)
 }
 
 function Get-Managers {
     param([string]$ConfigPath)
 
-    $providers = Get-Providers -Type Declarative
+    $providers = [System.Collections.Generic.List[object]]::new()
+    foreach ($provider in @(Get-Providers -Type Declarative)) { $providers.Add($provider) }
 
     if ($ConfigPath) {
-        $providers += Get-Providers -Type Declarative -BasePath $ConfigPath
+        foreach ($provider in @(Get-Providers -Type Declarative -BasePath $ConfigPath)) { $providers.Add($provider) }
     }
 
-    return $providers
+    return @($providers)
 }
 
 function Get-Triggers {
     param([string]$ConfigPath)
 
-    $providers = Get-Providers -Type Trigger 
+    $providers = [System.Collections.Generic.List[object]]::new()
+    foreach ($provider in @(Get-Providers -Type Trigger)) { $providers.Add($provider) }
 
     if ($ConfigPath) {
-        $providers += Get-Providers -Type Trigger -BasePath $ConfigPath
+        foreach ($provider in @(Get-Providers -Type Trigger -BasePath $ConfigPath)) { $providers.Add($provider) }
     }
 
-    return $providers
+    return @($providers)
 }
 
 function Resolve-Triggers {
@@ -129,7 +133,7 @@ function Resolve-Triggers {
     )
 
     $providers = Get-Triggers -ConfigPath $ConfigPath
-    $resolved = @()
+    $resolved = [System.Collections.Generic.List[object]]::new()
 
     # determine execution set
     if (-not $UserTriggers) {
@@ -174,14 +178,14 @@ function Resolve-Triggers {
             }
         }
 
-        $resolved += [pscustomobject]@{
+        $resolved.Add([pscustomobject]@{
             Name     = $provider.Name
             Provider = $provider
             Value    = $value
-        }
+        })
     }
 
-    return $resolved
+    return @($resolved)
 }
 
 function Get-ForwardedCommonParameters {
@@ -244,6 +248,37 @@ function Resolve-ProviderList {
     return $defaultProviders
 }
 
+
+function Resolve-ProviderRuntime {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [pscustomobject]$Provider)
+
+    if ($Provider.PSObject.Properties.Name -contains "Commands" -and $Provider.Commands) {
+        return $Provider
+    }
+
+    $module = Import-Module $Provider.Path -PassThru -ErrorAction Stop
+    return [pscustomobject]@{
+        Type     = $Provider.Type
+        Name     = $Provider.Name
+        Path     = $Provider.Path
+        Module   = $module
+        Commands = $module.ExportedCommands
+    }
+}
+
+function Get-ProviderRuntimeCommand {
+    param(
+        [Parameter(Mandatory)] $Runtime,
+        [Parameter(Mandatory)] [string]$Name
+    )
+
+    if ($Runtime.Commands -and $Runtime.Commands.ContainsKey($Name)) {
+        return $Runtime.Commands[$Name]
+    }
+    return $null
+}
+
 function Resolve-ProviderCommand {
     [CmdletBinding()]
     param(
@@ -252,11 +287,11 @@ function Resolve-ProviderCommand {
         [string]$Operation
     )
 
-    $cmdName = "$Operation-$($Provider.Name)State"
+    $runtime = Resolve-ProviderRuntime -Provider $Provider
+    $cmdName = "$Operation-$($runtime.Name)State"
     Write-Verbose "Resolving provider command: $cmdName"
 
-    $module = Import-Module $Provider.Path -PassThru -ErrorAction Stop
-    return Get-ProviderExportedCommand -Module $module -Name $cmdName
+    return Get-ProviderRuntimeCommand -Runtime $runtime -Name $cmdName
 }
 
 # =============================================================================
@@ -294,7 +329,9 @@ function Get-SystemState {
     )
 
     $allProviders = Get-Managers -ConfigPath $ConfigPath
-    Write-Debug "Available providers:`n$($allProviders | Out-String)"
+    if ($DebugPreference -ne "SilentlyContinue") {
+        Write-Debug "Available providers:`n$($allProviders | Out-String)"
+    }
 
     $Providers = Resolve-ProviderList $Providers
 
@@ -309,7 +346,9 @@ function Get-SystemState {
 
     foreach ($provider in $providersToCapture) {
         $providerState = Export-ProviderState -Provider $provider
-        Write-Debug "Provider [$($provider.Name)] state:`n$($providerState | Out-String)"
+        if ($DebugPreference -ne "SilentlyContinue") {
+            Write-Debug "Provider [$($provider.Name)] state:`n$($providerState | Out-String)"
+        }
         if ($providerState) {
             $state[$provider.Name] = $providerState
         }
@@ -365,12 +404,10 @@ function Compare-SystemState {
         $providerMap[$provider.Name.ToString().ToLowerInvariant()] = $provider
     }
     
-    $allDifferences = @{
-        Added   = @()
-        Removed = @()
-        Changed = @()
-        Equal   = @()
-    }
+    $added = [System.Collections.Generic.List[object]]::new()
+    $removed = [System.Collections.Generic.List[object]]::new()
+    $changed = [System.Collections.Generic.List[object]]::new()
+    $equal = [System.Collections.Generic.List[object]]::new()
     
     foreach ($providerName in $providersToCompare) {
         $provider = $providerMap[$providerName]
@@ -394,17 +431,22 @@ function Compare-SystemState {
         
         foreach ($diff in $diffs) {
             switch ($diff.Type) {
-                "Added" { $allDifferences.Added += $diff }
-                "Removed" { $allDifferences.Removed += $diff }
-                "Changed" { $allDifferences.Changed += $diff }
-                "Equal" { $allDifferences.Equal += $diff }
+                "Added" { $added.Add($diff) }
+                "Removed" { $removed.Add($diff) }
+                "Changed" { $changed.Add($diff) }
+                "Equal" { $equal.Add($diff) }
             }
         }
         
         Write-Log -Level "OK" -Message "Found $($diffs.Count) differences in $name"
     }
     
-    return $allDifferences
+    return @{
+        Added   = @($added)
+        Removed = @($removed)
+        Changed = @($changed)
+        Equal   = @($equal)
+    }
 }
 
 # =============================================================================
@@ -429,12 +471,11 @@ function Invoke-Manager {
     )
 
     $providerName = $Provider.Name
-    $providerPath = $Provider.Path
 
     Write-LogSection -Name $providerName
 
     try {
-        $module = Import-Module $providerPath -PassThru -ErrorAction Stop
+        $runtime = Resolve-ProviderRuntime -Provider $Provider
     }
     catch {
         Write-Log -Level ERROR -Message "Failed to load provider: $providerName"
@@ -442,11 +483,12 @@ function Invoke-Manager {
     }
 
     try {
+        $providerName = $runtime.Name
         $desired = $Config.$providerName
 
-        $testStateCmd = Get-ProviderExportedCommand -Module $module -Name "Test-$($providerName)State"
-        $setStateCmd  = Get-ProviderExportedCommand -Module $module -Name "Set-$($providerName)State"
-        $sandboxCmd   = Get-ProviderExportedCommand -Module $module -Name "Invoke-$($providerName)SandboxApply"
+        $testStateCmd = Get-ProviderRuntimeCommand -Runtime $runtime -Name "Test-$($providerName)State"
+        $setStateCmd  = Get-ProviderRuntimeCommand -Runtime $runtime -Name "Set-$($providerName)State"
+        $sandboxCmd   = Get-ProviderRuntimeCommand -Runtime $runtime -Name "Invoke-$($providerName)SandboxApply"
 
         if (!$testStateCmd -or !$setStateCmd) {
             Write-Log -Level ERROR -Message "Provider $providerName missing required functions"
@@ -657,6 +699,28 @@ function Invoke-Triggers {
 # MAIN EXECUTION
 # =============================================================================
 
+
+function Test-WinSpecResultSuccessful {
+    param($Result)
+
+    if ($Result -is [hashtable]) {
+        if ($Result.ContainsKey("Status") -and $Result.Status -eq "Error") { return $false }
+        foreach ($key in $Result.Keys) {
+            if ($key -eq "Success") { continue }
+            if (-not (Test-WinSpecResultSuccessful -Result $Result[$key])) { return $false }
+        }
+        return $true
+    }
+
+    if ($Result -is [System.Collections.IEnumerable] -and $Result -isnot [string]) {
+        foreach ($item in $Result) {
+            if (-not (Test-WinSpecResultSuccessful -Result $item)) { return $false }
+        }
+    }
+
+    return $true
+}
+
 function Get-ResultLogLevel {
     param([string]$Status)
 
@@ -714,9 +778,14 @@ function Invoke-WinSpec {
         return @{ Success = $false }
     }
     if ($Checkpoint) {
-        $checkpoint = New-Checkpoint -Name "WinSpec-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
-        if (-not $checkpoint.Success) {
-            Write-Log -Level "WARN" -Message "Checkpoint creation failed"
+        $checkpointResult = New-Checkpoint -Name "WinSpec-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+        if (-not $checkpointResult.Success) {
+            Write-Log -Level "ERROR" -Message "Checkpoint creation failed; aborting push"
+            return @{
+                Success    = $false
+                Reason     = "CheckpointFailed"
+                Checkpoint = $checkpointResult
+            }
         }
     }
 
@@ -736,7 +805,7 @@ function Invoke-WinSpec {
         -Triggers $Triggers `
         -CommonParameters $commonParameters
 
-    $results["Success"] = $true
+    $results["Success"] = Test-WinSpecResultSuccessful -Result $results
     Write-WinSpecResultSummary -Results $results
 
     return $results
@@ -756,6 +825,9 @@ Export-ModuleMember -Function @(
     "Resolve-Triggers"
     "Get-ForwardedCommonParameters"
     "Get-ProviderExportedCommand"
+    "Resolve-ProviderRuntime"
+    "Get-ProviderRuntimeCommand"
+    "Test-WinSpecResultSuccessful"
     "Test-WinSpecSandboxActive"
     "Get-WinSpecSandboxMode"
     # execution

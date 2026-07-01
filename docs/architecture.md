@@ -44,7 +44,7 @@ State is the observed or desired provider-shaped hashtable. WinSpec uses state f
 3. **Apply** missing declarative state through managers.
 4. **Merge** multiple specs into one composed target.
 
-State capture is fresh by default. The previous process-local provider cache and `-NoCache` API were removed to avoid stale or partial state across provider filters and config paths.
+State capture is fresh by default. The previous process-local provider cache and `-NoCache` API were removed to avoid stale or partial state across provider filters and config paths. Command-local provider runtime objects may reuse an imported module and exported-command map inside one command invocation, but no global provider cache is kept.
 
 ### Diff
 
@@ -61,7 +61,7 @@ Providers can supply sandbox-specific apply functions, but the core execution la
 
 ### Checkpoint
 
-A checkpoint is a Windows System Restore point created before risky system changes when requested. Checkpoint creation is explicit: WinSpec does not enable System Restore implicitly, and creating a restore point requires Administrator privileges. Rollback restores a previous checkpoint by sequence number or the latest WinSpec checkpoint, is guarded by `ShouldProcess`, and returns structured success/failure metadata rather than a bare boolean.
+A checkpoint is a Windows System Restore point created before risky system changes when requested. Checkpoint creation is explicit: WinSpec does not enable System Restore implicitly, and creating a restore point requires Administrator privileges. If a push requested a checkpoint and checkpoint creation fails, push stops before provider/trigger mutation. Rollback restores a previous checkpoint by sequence number or the latest WinSpec checkpoint, is guarded by `ShouldProcess`, and returns structured success/failure metadata rather than a bare boolean.
 
 ---
 
@@ -100,7 +100,7 @@ spec section
   -> result hashtable
 ```
 
-Managers own subsystem details. The core engine owns ordering, logging, sandbox routing, and result aggregation.
+Managers own subsystem details. The core engine owns ordering, logging, sandbox routing, and result aggregation. Top-level push success is derived from nested provider/trigger results, so any `Status = "Error"` marks the command unsuccessful.
 
 ### Trigger flow
 

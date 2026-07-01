@@ -371,21 +371,39 @@ Compare-SystemState
 
 `Compare-SystemState` must pass provider objects, not provider-name strings, because command resolution needs both `.Name` and `.Path`.
 
+
+### Pull flow
+
+```text
+Invoke-Pull
+  -> resolve provider selection from CLI -Providers or Spec.Providers
+  -> Get-SystemState -Providers <selection> -ConfigPath <path>
+       -> built-in managers plus <ConfigPath>/managers/*.psm1
+  -> optional Merge-Configuration when output exists and -Apply is set
+  -> optional minimal pruning
+  -> Save-Configuration when Output is set and not DryRun
+```
+
+`pull` output format is extension-driven by `Save-Configuration`: `.json` writes JSON; other extensions write PowerShell hashtable syntax. `pull` does not expose a separate format switch. Expected failures are structured as `NoStateCaptured`, `OutputExists`, or `MergeFailed`; successful pull still returns the captured config hashtable directly.
+
 ### Apply flow
 
 ```text
 Invoke-WinSpec
   -> Test-SpecSchema
   -> optional New-Checkpoint
+       -> if requested checkpoint fails: return Reason=CheckpointFailed before mutation
   -> Get-ForwardedCommonParameters
   -> Invoke-Managers
        -> Get-Managers -ConfigPath <path>
        -> restrict by CLI -Providers or Spec.Providers
+       -> Resolve-ProviderRuntime (command-local, no global cache)
        -> Invoke-Manager
-            -> module.ExportedCommands["Test-<Name>State"]
-            -> module.ExportedCommands["Set-<Name>State"]
-            -> optional module.ExportedCommands["Invoke-<Name>SandboxApply"]
+            -> runtime.Commands["Test-<Name>State"]
+            -> runtime.Commands["Set-<Name>State"]
+            -> optional runtime.Commands["Invoke-<Name>SandboxApply"]
   -> Invoke-Triggers
+  -> derive Success from nested provider/trigger Status=Error values
   -> Write-WinSpecResultSummary
 ```
 
@@ -396,7 +414,7 @@ Result shape:
     Registry = @{ Status = "Applied" }
     Feature  = @{ Status = "AlreadyInDesiredState" }
     Triggers = @{ debloat = @{ Status = "DryRun" } }
-    Success  = $true
+    Success  = $true  # false if any nested provider/trigger reports Status="Error"
 }
 ```
 
@@ -429,7 +447,7 @@ The orchestrator resolves sandbox commands through the loaded sandbox module rat
 
 ### Checkpoint and rollback behavior
 
-Checkpoint creation is explicit and privilege-gated:
+Checkpoint creation is explicit and privilege-gated. When `push -Checkpoint` requests a checkpoint, failure aborts the push before provider or trigger mutation:
 
 ```text
 New-Checkpoint
@@ -444,6 +462,7 @@ Failure result shape:
 @{ Success = $false; Reason = "SystemRestoreDisabled" }
 @{ Success = $false; Reason = "RequiresAdministrator" }
 @{ Success = $false; Reason = "CheckpointFailed"; Error = "..." }
+@{ Success = $false; Reason = "CheckpointFailed"; Checkpoint = @{ Reason = "RequiresAdministrator" } }
 ```
 
 Rollback selects either an explicit sequence number or the newest restore point whose description starts with `WinSpec` when `-Last` is used. `Restore-Computer` is called only inside `ShouldProcess`; under `-WhatIf`, rollback returns a structured result and does not restore the machine.
@@ -489,7 +508,7 @@ Development review notes and implementation slices live in [report/state-managem
 
 | Command | Important options |
 | --- | --- |
-| `pull` | `-Output`, `-Providers`, `-Interactive`, `-Apply`, `-DryRun` |
+| `pull` | `-Output`, `-Providers`, `-Interactive`, `-Apply`, `-DryRun`, `-ConfigPath` |
 | `push` | `-Spec`, `-Providers`, `-Triggers`, `-DryRun`, `-Checkpoint` |
 | `diff` | `-Spec`, `-Against`, `-Providers` |
 | `merge` | `-Base`, `-Incoming`, `-Output`, `-Strategy`, `-Interactive` |

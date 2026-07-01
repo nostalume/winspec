@@ -91,6 +91,10 @@ Important options:
 | `-Interactive` | Select captured items interactively. |
 | `-Apply` | Merge with existing output instead of replacing blindly. |
 
+Output format is extension-driven by the destination file path (`.json` writes JSON; other extensions write PowerShell hashtable syntax). `pull` uses the same provider universe as push/diff: built-in managers plus user managers under the resolved config path when one is supplied.
+
+Expected pull failures are structured: no captured provider state returns `Reason = "NoStateCaptured"`, existing output without `-Apply` returns `Reason = "OutputExists"`, and merge conflicts return `Reason = "MergeFailed"`.
+
 ### `push`
 
 Apply declarative sections and optionally selected triggers from a spec.
@@ -117,6 +121,8 @@ Notes:
 - Declarative managers are idempotent and test current state before applying.
 - Triggers are non-idempotent and only execute when selected.
 - Use `-DryRun`, sandbox mode, or `-Checkpoint` for safety.
+- `push` reports top-level `Success = $false` when any provider or trigger returns `Status = "Error"`.
+- If `-Checkpoint` is requested and checkpoint creation fails, push aborts before provider/trigger mutation and returns `Reason = "CheckpointFailed"` with the checkpoint failure details.
 
 ### `diff`
 
@@ -230,7 +236,7 @@ Sandbox mode lets providers simulate or report changes without modifying live st
 
 ### `checkpoint` / `rollback`
 
-`winspec push -Checkpoint` creates a Windows System Restore point before applying a spec. Checkpoint creation does not enable System Restore implicitly and requires the current process to be elevated. If System Restore is disabled, checkpoint creation returns `Success = $false`, `Reason = "SystemRestoreDisabled"`; if the process is not elevated, it returns `Reason = "RequiresAdministrator"`.
+`winspec push -Checkpoint` creates a Windows System Restore point before applying a spec. Checkpoint creation does not enable System Restore implicitly and requires the current process to be elevated. If System Restore is disabled, checkpoint creation returns `Success = $false`, `Reason = "SystemRestoreDisabled"`; if the process is not elevated, it returns `Reason = "RequiresAdministrator"`. A failed requested checkpoint aborts push before provider or trigger mutation.
 
 Restore a Windows System Restore checkpoint.
 

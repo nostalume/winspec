@@ -39,11 +39,6 @@ param (
     [Parameter(ParameterSetName = "Rollback")]
     [switch]$Last,
 
-    # Export-specific
-    [Parameter(ParameterSetName = "Export")]
-    [ValidateSet("ps1", "json")]
-    [string]$Format = "ps1",
-
     # Diff-specific
     [Parameter(ParameterSetName = "Diff")]
     [string]$Against,
@@ -557,8 +552,7 @@ switch ($Command) {
             if ($PSCmdlet.ShouldProcess($Output, "Save spec")) {
                 Save-Configuration `
                     -Config $systemState `
-                    -Path $Output `
-                    -Format $Format
+                    -Path $Output
             }
         }
         Write-LogHeader "System Status(JSON)"
@@ -634,7 +628,6 @@ switch ($Command) {
         }
         $pullParams = @{
             Spec    = $specContent
-            Format  = $Format
             Apply   = $Apply
         }
         if ($Output) { $pullParams['Output'] = $Output }
@@ -644,6 +637,7 @@ switch ($Command) {
         if ($DryRun) { $pullParams['DryRun'] = $true }
         if ($Name) { $pullParams['Name'] = $Name }
         if ($Description) { $pullParams['Description'] = $Description }
+        if ($ConfigPath) { $pullParams['ConfigPath'] = $ConfigPath }
         
         Import-Module (Join-Path $Script:WinspecRoot "pull.psm1") -ErrorAction Stop -Force
         Invoke-Pull @pullParams

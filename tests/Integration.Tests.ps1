@@ -348,6 +348,114 @@ Describe "Command Safety" {
                 Should -Invoke Save-Configuration -Times 0 -Exactly
             }
         }
+
+        It "Should save captured state without passing unsupported Format to Save-Configuration" {
+            $target = Join-Path $TestDrive "pull-output.ps1"
+
+            InModuleScope pull -Parameters @{ Target = $target } {
+                param($Target)
+
+                Mock Get-SystemState { @{ Registry = @{ Explorer = @{ ShowHidden = $true } } } }
+                Mock Save-Configuration {
+                    param([hashtable]$Config, [string]$Path)
+                    return $true
+                }
+
+                $result = Invoke-Pull -Output $Target -Spec @{}
+
+                $result.Registry.Explorer.ShowHidden | Should -BeTrue
+                Should -Invoke Save-Configuration -Times 1 -Exactly -ParameterFilter { $Path -eq $Target }
+            }
+        }
+
+        It "Should capture custom providers from ConfigPath" {
+            $root = Join-Path $TestDrive "pull-custom-provider"
+            $managerDir = Join-Path $root "managers"
+            New-Item -ItemType Directory -Path $managerDir -Force | Out-Null
+            @'
+function Get-ProviderInfo { @{ Name = "Custom"; Type = "Declarative" } }
+function Export-CustomState { @{ Enabled = $true } }
+function Test-CustomState { param([hashtable]$Desired) $true }
+function Set-CustomState { param([hashtable]$Desired) @{ Status = "Applied" } }
+Export-ModuleMember -Function Get-ProviderInfo, Export-CustomState, Test-CustomState, Set-CustomState
+'@ | Set-Content -Path (Join-Path $managerDir "Custom.psm1")
+
+            $result = Invoke-Pull -Spec @{} -Providers @("Custom") -ConfigPath $root -DryRun
+
+            $result.Custom.Enabled | Should -BeTrue
+        }
+
+        It "Should return structured failure when no state is captured" {
+            InModuleScope pull {
+                Mock Get-SystemState { @{} }
+
+                $result = Invoke-Pull -Spec @{}
+
+                $result.Success | Should -BeFalse
+                $result.Reason | Should -Be "NoStateCaptured"
+            }
+        }
+
+        It "Should return structured failure when output exists without Apply" {
+            $target = Join-Path $TestDrive "existing-output.ps1"
+            "@{}" | Set-Content -Path $target
+
+            InModuleScope pull -Parameters @{ Target = $target } {
+                param($Target)
+                Mock Get-SystemState { @{ Registry = @{ Explorer = @{ ShowHidden = $true } } } }
+
+                $result = Invoke-Pull -Output $Target -Spec @{}
+
+                $result.Success | Should -BeFalse
+                $result.Reason | Should -Be "OutputExists"
+            }
+        }
+
+        It "Should return structured failure when merge fails" {
+            $target = Join-Path $TestDrive "merge-fail-output.ps1"
+            "@{}" | Set-Content -Path $target
+
+            InModuleScope pull -Parameters @{ Target = $target } {
+                param($Target)
+                Mock Get-SystemState { @{ Registry = @{ Explorer = @{ ShowHidden = $true } } } }
+                Mock Merge-Configuration { @{ Success = $false; Conflicts = @("boom") } }
+
+                $result = Invoke-Pull -Output $Target -Spec @{} -Apply
+
+                $result.Success | Should -BeFalse
+                $result.Reason | Should -Be "MergeFailed"
+            }
+        }
+    }
+
+    Context "Invoke-Push" {
+        It "Should not log success when WinSpec execution fails" {
+            InModuleScope push {
+                Mock Write-LogHeader { }
+                Mock Invoke-WinSpec { @{ Success = $false; Reason = "SchemaInvalid" } }
+                Mock Write-Log { }
+                Mock Test-SandboxActive { $false }
+
+                $result = Invoke-Push -Spec @{}
+
+                $result.Success | Should -BeFalse
+                Should -Invoke Write-Log -ParameterFilter { $Level -eq "OK" -and $Message -like "*completed successfully*" } -Times 0
+                Should -Invoke Write-Log -ParameterFilter { $Level -eq "ERROR" -and $Message -eq "Push failed" } -Times 1
+            }
+        }
+
+        It "Should exit dry-run sandbox when WinSpec execution fails" {
+            InModuleScope push {
+                Mock Invoke-WinSpec { @{ Success = $false; Reason = "SchemaInvalid" } }
+                Mock Write-Log { }
+                Mock Write-LogHeader { }
+
+                $result = Invoke-Push -Spec @{} -DryRun
+
+                $result.Success | Should -BeFalse
+                Test-SandboxActive | Should -BeFalse
+            }
+        }
     }
 
     Context "New-Checkpoint" {
