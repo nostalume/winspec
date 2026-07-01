@@ -361,3 +361,14 @@ Acceptance:
 3. Slices 6-8: sandbox persistence and algorithm cleanup.
 
 Do not mix comparison fixes and sandbox persistence in one commit. The failure modes are different: comparison is pure data normalization; sandbox is process/file-state correctness.
+
+
+## Privilege and retired API follow-up
+
+Completed after the comparison/sandbox slice:
+
+- Removed the no-op state-cache API surfaces: `Clear-SystemStateCache`, `Get-SystemState -NoCache`, root CLI `-NoCache`, pull/status/diff forwarding, and user docs that described cache bypass behavior.
+- Tightened Feature and Service live behavior: when the process is not elevated, providers return or log `Reason = "RequiresAdministrator"` and do not call `Invoke-AdminCommand` or mutation cmdlets.
+- Tightened Service safety locality: built-in Service provider export and apply are restricted to the `WindowsConfigurableServices` allow-list. Explicit export requests are filtered to the allow-list; live apply rejects unmanaged services with `Reason = "ServiceNotManaged"`.
+
+Rationale: feature/service mutation is high-impact. Non-admin execution should fail visibly rather than launching generated elevated scripts, and the built-in Service provider should not become an arbitrary native-service mutation surface.

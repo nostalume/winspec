@@ -20,9 +20,6 @@ param (
     [switch]$DryRun,
 
     [Parameter()]
-    [switch]$NoCache = $false,
-
-    [Parameter()]
     [string]$Output,
 
     [Parameter()]
@@ -267,7 +264,6 @@ OPTIONS:
     -DryRun              Preview what would be captured
     -Apply               Merge with existing spec if output file already exists
     -Interactive         Interactive item selection
-    -NoCache             Skip caching of provider data
 
  EXAMPLES:
     # Pull to default file
@@ -457,7 +453,6 @@ AVAILABLE COMMANDS:
 GLOBAL OPTIONS:
     -Spec           Configuration file path
     -DryRun         Preview changes without applying
-    -NoCache        Skip caching of provider data
     -Output         Output file path
     -Providers      Array of providers to include
     -Apply          Apply changes (for merge operations)
@@ -552,7 +547,7 @@ switch ($Command) {
         
         Write-Log INFO "Capturing system state..."
 
-        $systemState = Get-SystemState -Providers $Providers -NoCache:$NoCache 
+        $systemState = Get-SystemState -Providers $Providers
         if (-not $systemState -or $systemState.Count -eq 0) {
             Write-Log WARN "No system state captured"
             return
@@ -640,7 +635,6 @@ switch ($Command) {
         $pullParams = @{
             Spec    = $specContent
             Format  = $Format
-            NoCache = $NoCache
             Apply   = $Apply
         }
         if ($Output) { $pullParams['Output'] = $Output }
@@ -691,7 +685,7 @@ switch ($Command) {
             $againstContent = Get-Spec -Path $Against
         }
         else {
-            $againstContent = Get-SystemState -Providers $Providers -NoCache:$NoCache
+            $againstContent = Get-SystemState -Providers $Providers
         }
         $diffParams = @{
             Spec = $specContent

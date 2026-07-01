@@ -89,6 +89,11 @@ function Set-FeatureState {
         [Parameter(Mandatory = $true)]
         [hashtable]$Desired
     )
+
+    if (-not (Test-IsAdmin)) {
+        Write-Log -Level "ERROR" -Message "Windows feature changes require Administrator privileges"
+        return @{ Status = "Error"; Reason = "RequiresAdministrator"; Message = "Windows feature changes require Administrator privileges" }
+    }
     
     $results = @{}
     
@@ -115,14 +120,10 @@ function Set-FeatureState {
         if ($PSCmdlet.ShouldProcess($featureName, "Set state to '$desiredState'")) {
             try {
                 if ($desiredState -eq "enabled") {
-                    Invoke-AdminCommand {
-                        Enable-WindowsOptionalFeature -Online -FeatureName $featureName -NoRestart -All
-                    }
+                    Enable-WindowsOptionalFeature -Online -FeatureName $featureName -NoRestart -All -ErrorAction Stop | Out-Null
                 }
                 else {
-                    Invoke-AdminCommand {
-                        Disable-WindowsOptionalFeature -Online -FeatureName $featureName -NoRestart
-                    }
+                    Disable-WindowsOptionalFeature -Online -FeatureName $featureName -NoRestart -ErrorAction Stop | Out-Null
                 }
                 
                 Write-LogApplied -Name $featureName -DesiredValue $desiredState
@@ -146,12 +147,14 @@ function Export-FeatureState {
     )
 
     $result = @{}
+    if (-not (Test-IsAdmin)) {
+        Write-Log -Level "ERROR" -Message "Windows feature export requires Administrator privileges"
+        return $result
+    }
     try {
-        $features = Invoke-AdminCommand {
-            Get-WindowsOptionalFeature -Online |
+        $features = Get-WindowsOptionalFeature -Online -ErrorAction Stop |
             Where-Object { $_.State -ne 'Removed' -and $_.State -ne "DisabledWithPayloadRemoved" } |
             Select-Object FeatureName, @{ Name = 'State'; Expression = { $_.State.ToString() } }
-        }
 
         if ($FeatureNames.Count -gt 0) {
             $features = $features | Where-Object {

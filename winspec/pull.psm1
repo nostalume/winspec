@@ -28,8 +28,6 @@ function Invoke-Pull {
 
         [switch]$Minimal,
 
-        [switch]$NoCache,
-
         [switch]$DryRun,
 
         [switch]$Interactive,
@@ -50,9 +48,7 @@ function Invoke-Pull {
     }
 
     Write-Log INFO "Capturing system state..."
-    $systemState = Get-SystemState `
-        -Providers $effectiveProviders `
-        -NoCache:$NoCache
+    $systemState = Get-SystemState -Providers $effectiveProviders
 
     if (-not $systemState -or $systemState.Count -eq 0) {
         Write-Log WARN "No system state captured"

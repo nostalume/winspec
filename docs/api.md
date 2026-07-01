@@ -26,7 +26,7 @@ cd winspec
 
 After Scoop installation or PATH setup, examples may use `winspec` instead of `./winspec/winspec.ps1`.
 
-Most live-system operations require Administrator privileges.
+Most live-system operations require Administrator privileges. Providers that require elevation fail explicitly when the current process is not elevated; WinSpec does not silently mutate services from a non-admin process.
 
 ---
 
@@ -56,7 +56,6 @@ Global options include:
 | `-Output <path>` | Output path for commands that write files. |
 | `-Providers <names>` | Restrict operation to named providers. |
 | `-DryRun` | Preview changes without applying. |
-| `-NoCache` | Bypass provider state cache. |
 | `-Help` | Show help for the selected command. |
 
 ### `pull`
@@ -91,7 +90,6 @@ Important options:
 | `-Providers` | Provider names to capture. |
 | `-Interactive` | Select captured items interactively. |
 | `-Apply` | Merge with existing output instead of replacing blindly. |
-| `-NoCache` | Force fresh provider reads. |
 
 ### `push`
 
@@ -367,6 +365,12 @@ Feature = @{
 
 Values: `"enabled"`, `"disabled"`.
 
+Safety behavior:
+
+- Live feature export and mutation require Administrator privileges.
+- Without elevation, feature export returns no feature state and logs an error; live feature apply returns `Status = "Error"`, `Reason = "RequiresAdministrator"`.
+- The Feature provider no longer spawns generated elevated scripts for export/apply.
+
 See [reference.md](reference.md#feature) for feature values and discovery commands.
 
 ### `Service`
@@ -387,7 +391,13 @@ Fields:
 | `State` | `"running"`, `"stopped"` |
 | `Startup` | `"automatic"`, `"manual"`, `"disabled"` |
 
-See [reference.md](reference.md#service) for service values and discovery commands.
+Safety behavior:
+
+- Live service changes require Administrator privileges. Without elevation, the Service provider returns `Status = "Error"`, `Reason = "RequiresAdministrator"`, and does not call `Set-Service`, `Start-Service`, or `Stop-Service`.
+- The built-in Service provider only manages a small allow-list of Windows services. Services outside that allow-list return `Reason = "ServiceNotManaged"` and are not mutated.
+- Default service export and explicit `Export-ServiceState -ServiceNames ...` filter to that allow-list.
+
+See [reference.md](reference.md#service) for the current allow-list and discovery commands.
 
 ### `Trigger` and `TriggerConfig`
 

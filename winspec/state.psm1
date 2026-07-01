@@ -13,17 +13,6 @@ Import-Module (Join-Path $ModuleRoot "sandbox.psm1") -ErrorAction SilentlyContin
 # PROVIDER RESOLUTION
 # =============================================================================
 
-function Clear-SystemStateCache {
-    <#
-    .SYNOPSIS
-        Clears the system state cache.
-    .DESCRIPTION
-        Forces the next Get-SystemState call to fetch fresh data instead of
-        returning cached values. Useful after making system changes.
-    #>
-    [CmdletBinding()]
-    param()
-}
 # =============================================================================
 # PROVIDER DISCOVERY
 # =============================================================================
@@ -291,8 +280,7 @@ function Get-SystemState {
     [CmdletBinding()]
     param(
         [string[]]$Providers = @(),
-        [string]$ConfigPath,
-        [switch]$NoCache
+        [string]$ConfigPath
     )
 
     $allProviders = Get-Managers -ConfigPath $ConfigPath
@@ -760,8 +748,6 @@ Export-ModuleMember -Function @(
     "Get-ProviderExportedCommand"
     "Test-WinSpecSandboxActive"
     "Get-WinSpecSandboxMode"
-    # cache
-    "Clear-SystemStateCache"
     # execution
     "Invoke-WinSpec"
     "Invoke-Managers"

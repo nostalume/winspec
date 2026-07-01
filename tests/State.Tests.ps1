@@ -202,7 +202,7 @@ Describe "State Export" {
                 }
                 Mock Export-ProviderState { return @{ Explorer = @{ ShowHidden = $true } } }
                 
-                $result = Get-SystemState -NoCache
+                $result = Get-SystemState
                 $result | Should -Not -BeNullOrEmpty
                 $result -is [hashtable] | Should -BeTrue
             }
@@ -217,7 +217,7 @@ Describe "State Export" {
                 }
                 Mock Export-ProviderState { return @{ Explorer = @{ ShowHidden = $true } } }
                 
-                $result = Get-SystemState -Providers @("Registry") -NoCache
+                $result = Get-SystemState -Providers @("Registry")
                 $result | Should -Not -BeNullOrEmpty
             }
         }
@@ -275,6 +275,17 @@ Describe "Utility Surface" {
         It "Should not export package merge helpers after package managers are retired" {
             Get-Command Merge-PackageState -ErrorAction SilentlyContinue | Should -BeNullOrEmpty
             Get-Command Merge-SourceCollection -ErrorAction SilentlyContinue | Should -BeNullOrEmpty
+        }
+    }
+}
+
+
+
+Describe "Retired state cache API" {
+    It "Should not expose cache bypass or cache clearing APIs after cache removal" {
+        InModuleScope state {
+            (Get-Command Get-SystemState).Parameters.ContainsKey("NoCache") | Should -BeFalse
+            Get-Command Clear-SystemStateCache -ErrorAction SilentlyContinue | Should -BeNullOrEmpty
         }
     }
 }

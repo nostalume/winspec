@@ -276,15 +276,35 @@ Get-Service | Where-Object { $_.DisplayName -like "*Windows*" }
 Get-WmiObject -Class Win32_Service | Select-Object Name, DisplayName, State, StartMode
 ```
 
-Common services:
+Built-in Service provider safety allow-list:
 
 | Name | Display name |
 | --- | --- |
-| `wuauserv` | Windows Update |
-| `WinDefend` | Windows Defender |
-| `Spooler` | Print Spooler |
+| `WinDefend` | Microsoft Defender Antivirus Service |
+| `WdNisSvc` | Microsoft Defender Antivirus Network Inspection Service |
+| `SecurityHealthService` | Windows Security Health Service |
+| `DiagTrack` | Connected User Experiences and Telemetry |
+| `dmwappushservice` | WAP Push Message Routing Service |
 | `WSearch` | Windows Search |
+| `wuauserv` | Windows Update |
+| `UsoSvc` | Update Orchestrator Service |
 | `BITS` | Background Intelligent Transfer Service |
+| `Dnscache` | DNS Client |
+| `Dhcp` | DHCP Client |
+| `NlaSvc` | Network Location Awareness |
+| `RemoteRegistry` | Remote Registry |
+| `TermService` | Remote Desktop Services |
+| `WinRM` | Windows Remote Management |
+| `SysMain` | SysMain |
+| `WerSvc` | Windows Error Reporting Service |
+| `Spooler` | Print Spooler |
+
+Service safety behavior:
+
+- Export defaults to the allow-list above.
+- Explicit service export requests are filtered to the same allow-list.
+- Live apply refuses unmanaged services with `Reason = "ServiceNotManaged"`.
+- Live apply refuses non-elevated processes with `Reason = "RequiresAdministrator"`; it does not spawn an elevated service script.
 
 ### Trigger and TriggerConfig
 
@@ -334,7 +354,7 @@ Notes:
 
 - Built-in managers come from `winspec/managers/*.psm1`.
 - User managers come from `<ConfigPath>/managers/*.psm1`.
-- The previous process-local state cache has been removed; `Clear-SystemStateCache` currently remains as a no-op compatibility export.
+- State capture is fresh by default. The previous process-local state cache, `Clear-SystemStateCache`, and `-NoCache` surfaces have been removed.
 
 ### Compare flow
 
@@ -409,11 +429,11 @@ Development review notes and implementation slices live in [report/state-managem
 
 | Command | Important options |
 | --- | --- |
-| `pull` | `-Output`, `-Providers`, `-Interactive`, `-Apply`, `-DryRun`, `-NoCache` |
+| `pull` | `-Output`, `-Providers`, `-Interactive`, `-Apply`, `-DryRun` |
 | `push` | `-Spec`, `-Providers`, `-Triggers`, `-DryRun`, `-Checkpoint` |
-| `diff` | `-Spec`, `-Against`, `-Providers`, `-NoCache` |
+| `diff` | `-Spec`, `-Against`, `-Providers` |
 | `merge` | `-Base`, `-Incoming`, `-Output`, `-Strategy`, `-Interactive` |
-| `status` | `-Providers`, `-Output`, `-NoCache` |
+| `status` | `-Providers`, `-Output` |
 | `sandbox` | `-Enter`, `-Exit`, `-List`, `-Mode`, `-Snapshot` |
 | `rollback` | `-Last`, `-SequenceNumber` |
 | `validate` | `-Spec` |

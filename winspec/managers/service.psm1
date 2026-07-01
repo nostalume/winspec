@@ -33,6 +33,22 @@ $WindowsConfigurableServices = @(
     "Spooler"
 )
 
+function Test-ServiceManaged {
+    param([Parameter(Mandatory)][string]$Name)
+
+    return $WindowsConfigurableServices -contains $Name
+}
+
+function Resolve-ManagedServiceNames {
+    param([string[]]$ServiceNames)
+
+    if (-not $ServiceNames -or $ServiceNames.Count -eq 0) {
+        return $WindowsConfigurableServices
+    }
+
+    return @($ServiceNames | Where-Object { Test-ServiceManaged -Name $_ })
+}
+
 function Get-ProviderInfo {
     return @{
         Name = "Service"
@@ -135,15 +151,20 @@ function Set-ServiceState {
     )
 
     if (-not (Test-IsAdmin)) {
-        return Invoke-AdminCommand {
-            Set-ServiceState -Desired $using:Desired
-        }
+        Write-Log -Level ERROR -Message "Service changes require Administrator privileges"
+        return @{ Status = "Error"; Reason = "RequiresAdministrator"; Message = "Service changes require Administrator privileges" }
     }
 
     $states = Get-ServiceState -ServiceNames $Desired.Keys
     $results = @{}
 
     foreach ($name in $Desired.Keys) {
+
+        if (-not (Test-ServiceManaged -Name $name)) {
+            Write-Log -Level ERROR -Message "Service is not managed by WinSpec safety allow-list: $name"
+            $results[$name] = @{ Status = "Error"; Reason = "ServiceNotManaged"; Message = "Service is not managed by WinSpec" }
+            continue
+        }
 
         $current = $states[$name]
 
@@ -225,9 +246,7 @@ function Export-ServiceState {
         [string[]]$ServiceNames
     )
 
-    if (-not $ServiceNames) {
-        $ServiceNames = $WindowsConfigurableServices
-    }
+    $ServiceNames = Resolve-ManagedServiceNames -ServiceNames $ServiceNames
     
     Write-Verbose "Exporting service state for: $($ServiceNames -join ', ')"
     
@@ -377,9 +396,10 @@ function Invoke-ServiceSandboxApply {
 Export-ModuleMember -Function @(
     "Get-ProviderInfo"
     "Get-ServiceState"
+    "Test-ServiceManaged"
+    "Resolve-ManagedServiceNames"
     "ConvertTo-ServiceSpecState"
     "ConvertTo-ServiceSpecStartup"
-    "Get-AllServiceStates"
     "Test-ServiceState"
     "Set-ServiceState"
     "Export-ServiceState"

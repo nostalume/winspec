@@ -97,6 +97,34 @@ Describe "Feature Provider" {
         }
     }
 
+
+    Context "Feature privilege boundaries" {
+        It "Should not spawn elevated scripts when exporting features without Administrator privileges" {
+            InModuleScope feature {
+                Mock Test-IsAdmin { return $false }
+                Mock Invoke-AdminCommand { throw "Feature export should not spawn an elevated script" }
+
+                $state = Export-FeatureState
+
+                $state.Count | Should -Be 0
+                Should -Invoke Invoke-AdminCommand -Times 0 -Exactly
+            }
+        }
+
+        It "Should refuse to mutate features when process is not elevated" {
+            InModuleScope feature {
+                Mock Test-IsAdmin { return $false }
+                Mock Invoke-AdminCommand { throw "Feature provider should not spawn an elevated script" }
+
+                $result = Set-FeatureState -Desired @{ TestFeature = "enabled" }
+
+                $result.Status | Should -Be "Error"
+                $result.Reason | Should -Be "RequiresAdministrator"
+                Should -Invoke Invoke-AdminCommand -Times 0 -Exactly
+            }
+        }
+    }
+
     Context "Get-FeatureState" {
         It "Should get feature state" {
             # Get-FeatureState calls Export-FeatureState; mock it in feature module scope
@@ -177,6 +205,10 @@ Describe "Service Provider" {
         It "Should export sandbox apply function used by manager dispatcher" {
             Get-Command Invoke-ServiceSandboxApply -ErrorAction SilentlyContinue | Should -Not -BeNullOrEmpty
         }
+
+        It "Should not export undefined legacy service helper APIs" {
+            Get-Command Get-AllServiceStates -ErrorAction SilentlyContinue | Should -BeNullOrEmpty
+        }
     }
 
     Context "Get-ServiceState" {
@@ -237,6 +269,64 @@ Describe "Service Provider" {
                 $result = Test-ServiceState -Desired @{ MissingService = @{ State = "running" } }
 
                 $result | Should -BeFalse
+            }
+        }
+    }
+
+
+    Context "Service safety boundaries" {
+        It "Should refuse to mutate services when process is not elevated" {
+            InModuleScope service {
+                Mock Test-IsAdmin { return $false }
+                Mock Invoke-AdminCommand { throw "Service provider should not spawn an elevated script" }
+                Mock Set-Service { throw "Set-Service should not run without elevation" }
+                Mock Start-Service { throw "Start-Service should not run without elevation" }
+                Mock Stop-Service { throw "Stop-Service should not run without elevation" }
+
+                $result = Set-ServiceState -Desired @{ wuauserv = @{ Startup = "disabled"; State = "stopped" } }
+
+                $result.Status | Should -Be "Error"
+                $result.Reason | Should -Be "RequiresAdministrator"
+                Should -Invoke Invoke-AdminCommand -Times 0 -Exactly
+                Should -Invoke Set-Service -Times 0 -Exactly
+                Should -Invoke Start-Service -Times 0 -Exactly
+                Should -Invoke Stop-Service -Times 0 -Exactly
+            }
+        }
+
+        It "Should not manage services outside the built-in safety allow-list" {
+            InModuleScope service {
+                Mock Test-IsAdmin { return $true }
+                Mock Get-ServiceState {
+                    return @{ EventLog = [pscustomobject]@{ Name = "EventLog"; State = "Running"; Startup = "Automatic" } }
+                }
+                Mock Set-Service { throw "Set-Service should not run for unmanaged services" }
+                Mock Stop-Service { throw "Stop-Service should not run for unmanaged services" }
+                Mock Start-Service { throw "Start-Service should not run for unmanaged services" }
+
+                $result = Set-ServiceState -Desired @{ EventLog = @{ State = "stopped"; Startup = "disabled" } }
+
+                $result.EventLog.Status | Should -Be "Error"
+                $result.EventLog.Reason | Should -Be "ServiceNotManaged"
+                Should -Invoke Set-Service -Times 0 -Exactly
+                Should -Invoke Start-Service -Times 0 -Exactly
+                Should -Invoke Stop-Service -Times 0 -Exactly
+            }
+        }
+
+        It "Should filter explicit service export requests to the safety allow-list" {
+            InModuleScope service {
+                Mock Get-Service {
+                    return @(
+                        [pscustomobject]@{ Name = "wuauserv"; Status = "Running"; StartType = "Manual" },
+                        [pscustomobject]@{ Name = "EventLog"; Status = "Running"; StartType = "Automatic" }
+                    )
+                }
+
+                $state = Export-ServiceState -ServiceNames @("wuauserv", "EventLog")
+
+                $state.ContainsKey("wuauserv") | Should -BeTrue
+                $state.ContainsKey("EventLog") | Should -BeFalse
             }
         }
     }

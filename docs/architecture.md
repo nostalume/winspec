@@ -44,7 +44,7 @@ State is the observed or desired provider-shaped hashtable. WinSpec uses state f
 3. **Apply** missing declarative state through managers.
 4. **Merge** multiple specs into one composed target.
 
-State is cached briefly during a run to avoid repeated expensive provider calls. `-NoCache` bypasses this behavior where freshness matters more than speed.
+State capture is fresh by default. The previous process-local provider cache and `-NoCache` API were removed to avoid stale or partial state across provider filters and config paths.
 
 ### Diff
 
