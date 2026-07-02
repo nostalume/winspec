@@ -71,15 +71,15 @@ WinSpec distinguishes between two types of providers:
 
 - Windows 10/11
 - PowerShell 5.1 or PowerShell 7+
-- Administrator privileges (for most operations)
+- Administrator privileges only for privileged providers/operations (for example Windows Features, service mutation, checkpoints, and remote execution triggers). Registry HKCU capture/apply can run unelevated.
 
 ### Install via Scoop (Recommended)
 
 ```powershell
 # Add the bucket
-scoop bucket add winspec https://github.com/lvyuemeng/winspec
+scoop bucket add winspec https://github.com/nostalume/winspec
 
-# Install WinSpec
+# Install WinSpec (current release: v0.5.2)
 scoop install winspec
 
 # Verify installation
@@ -96,13 +96,13 @@ scoop update winspec
 
 1. Clone the repository:
    ```powershell
-   git clone https://github.com/lvyuemeng/winspec.git
+   git clone https://github.com/nostalume/winspec.git
    cd winspec
    ```
 
 2. (Optional) Run tests to verify installation:
    ```powershell
-   .\winspec\tests\run-tests.ps1
+   Invoke-Pester -Path ./tests
    ```
 
 3. Start using WinSpec:
@@ -124,11 +124,14 @@ Capture your current system setup (or start fresh):
 # Pull current system state to default location (~/.config/winspec/.winspec.ps1)
 .\winspec\winspec.ps1 pull
 
-# Or pull to specific file with template and comments
-.\winspec\winspec.ps1 pull -Output my-config.ps1 -Template
+# Pull to a specific file
+.\winspec\winspec.ps1 pull -Output my-config.ps1
 
-# Interactive mode - choose what to include
-.\winspec\winspec.ps1 pull -Interactive
+# Pull to a config directory; writes .winspec.ps1 inside it
+.\winspec\winspec.ps1 pull -Output $HOME/.config/winspec
+
+# If the output spec already exists, merge captured state explicitly
+.\winspec\winspec.ps1 pull -Output $HOME/.config/winspec -Apply
 ```
 
 **Step 2: Push configuration to system**
@@ -222,12 +225,13 @@ Capture your current system setup (or start fresh):
     
     # === TRIGGERS (Non-Idempotent) ===
     
-    # Array of triggers to execute
-    Trigger = @(
-        @{ Name = "Activation" }                          # Run activation
-        @{ Name = "Debloat"; Value = "silent" }           # Run debloat with option
-        @{ Name = "Office"; Value = "C:\Installers" }      # Download Office to path
-    )
+    # Explicit trigger names plus typed parameters in TriggerConfig
+    Trigger = @("Activation", "Debloat", "Office")
+    TriggerConfig = @{
+        Activation = @{ Method = "HWID" }
+        Debloat    = @{ Silent = $true; RemoveCopilot = $true }
+        Office     = @{ Path = "C:\Installers"; Cache = $true }
+    }
 }
 ```
 
@@ -251,9 +255,10 @@ WinSpec is modular - you can use only the providers you need. Simply omit the pr
 # Only use Triggers - no declarative providers
 @{
     Name = "triggers-only"
-    Trigger = @(
-        @{ Name = "Activation" }
-    )
+    Trigger = @("Activation")
+    TriggerConfig = @{
+        Activation = @{ Method = "HWID" }
+    }
 }
 ```
 
@@ -261,6 +266,8 @@ WinSpec is modular - you can use only the providers you need. Simply omit the pr
 ```powershell
 # Pull only Registry and Feature state (ignore Service)
 winspec pull -Providers Registry,Feature -Output my-config.ps1
+
+# Non-admin Feature export is skipped with a warning instead of being reported as captured
 ```
 
 ### Examples
@@ -293,12 +300,11 @@ winspec pull -Providers Registry,Feature -Output my-config.ps1
 .\winspec\winspec.ps1 rollback -Last
 
 # === Other Commands ===
-# Initialize a new configuration from current system state
-.\winspec\winspec.ps1 init
+# Run triggers listed in a spec
+.\winspec\winspec.ps1 trigger -Spec .\myconfig.ps1
 
-# Run specific trigger(s)
-.\winspec\winspec.ps1 trigger "activation"
-.\winspec\winspec.ps1 trigger "activation", "debloat"
+# Run selected triggers from a spec
+.\winspec\winspec.ps1 trigger -Spec .\myconfig.ps1 -Triggers Activation,Debloat
 
 # Merge two config files
 .\winspec\winspec.ps1 merge -Base base.ps1 -Incoming custom.ps1 -Output merged.ps1
@@ -320,7 +326,25 @@ Trigger providers download and execute remote scripts:
 - **Debloat**: Downloads from `https://debloat.raphi.re/`
 - **Office**: Downloads from Microsoft CDN
 
-These scripts require administrator privileges. Always run trigger changes with `-DryRun`/`-WhatIf` first and review remote sources before live execution.
+These scripts require administrator privileges. Trigger modules use PowerShell `ShouldProcess`; always run trigger changes with `-DryRun`/`-WhatIf` first and review remote sources before live execution.
+
+---
+
+## Current Release State
+
+- Current release tag: `v0.5.2`.
+- Repository: <https://github.com/nostalume/winspec>.
+- Release tags drive the GitHub Release and Scoop manifest update workflow.
+- Core tests are Pester-based: `Invoke-Pester -Path ./tests`.
+
+Recent behavior notes:
+
+- `pull -Output <directory>` writes `<directory>/.winspec.ps1`.
+- Pull exits before provider capture when the output spec exists and `-Apply` is not supplied.
+- Providers that return empty state are not listed as captured.
+- Non-admin Feature export is skipped with a warning; Feature mutation still requires Administrator privileges.
+- `push -DryRun` uses sandbox mode and cleans up the sandbox context after execution.
+- `push -Checkpoint` aborts before mutation if checkpoint creation fails.
 
 ---
 
