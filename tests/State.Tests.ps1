@@ -244,6 +244,27 @@ Describe "State Export" {
                 $second.ContainsKey("Registry") | Should -BeFalse
             }
         }
+
+
+        It "Should not report providers that returned empty state as captured" {
+            InModuleScope state {
+                Mock Get-Managers {
+                    return @(
+                        [PSCustomObject]@{ Name = "Registry"; Type = "Declarative"; Path = "registry.psm1" },
+                        [PSCustomObject]@{ Name = "Feature"; Type = "Declarative"; Path = "feature.psm1" }
+                    )
+                }
+                Mock Export-ProviderState {
+                    if ($Provider.Name -eq "Registry") { return @{ Marker = "registry" } }
+                    if ($Provider.Name -eq "Feature") { return @{} }
+                }
+
+                $result = Get-SystemState
+
+                $result.ContainsKey("Registry") | Should -BeTrue
+                $result.ContainsKey("Feature") | Should -BeFalse
+            }
+        }
     }
 }
 

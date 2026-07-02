@@ -524,3 +524,8 @@ Development review notes and implementation slices live in [report/state-managem
 ## Reference maintenance rule
 
 This file is allowed to be concrete and ephemeral. Update it whenever modules, provider schemas, function names, or file layout change. Keep stable design claims out of this file unless they directly describe the current implementation surface.
+
+
+### Pull output path and skipped providers
+
+Directory outputs are normalized before capture: `winspec pull -Output ~/.config/winspec` writes `~/.config/winspec/.winspec.ps1`. If that file already exists and `-Apply` is not supplied, pull exits before provider capture so privilege-bound providers do not emit unrelated warnings. Providers that return empty state are not listed as captured.

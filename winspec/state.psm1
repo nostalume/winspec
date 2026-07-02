@@ -349,6 +349,9 @@ function Get-SystemState {
         if ($DebugPreference -ne "SilentlyContinue") {
             Write-Debug "Provider [$($provider.Name)] state:`n$($providerState | Out-String)"
         }
+        if ($providerState -is [hashtable] -and $providerState.Count -eq 0) {
+            continue
+        }
         if ($providerState) {
             $state[$provider.Name] = $providerState
         }

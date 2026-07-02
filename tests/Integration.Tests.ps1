@@ -402,12 +402,31 @@ Export-ModuleMember -Function Get-ProviderInfo, Export-CustomState, Test-CustomS
 
             InModuleScope pull -Parameters @{ Target = $target } {
                 param($Target)
-                Mock Get-SystemState { @{ Registry = @{ Explorer = @{ ShowHidden = $true } } } }
+                Mock Get-SystemState { throw "Get-SystemState should not run when output exists without Apply" }
 
                 $result = Invoke-Pull -Output $Target -Spec @{}
 
                 $result.Success | Should -BeFalse
                 $result.Reason | Should -Be "OutputExists"
+                $result.Path | Should -Be $Target
+            }
+        }
+
+
+        It "Should treat directory Output as the default spec file inside that directory" {
+            $targetDir = Join-Path $TestDrive "winspec-output-dir"
+            New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
+            $expected = Join-Path $targetDir ".winspec.ps1"
+
+            InModuleScope pull -Parameters @{ TargetDir = $targetDir; Expected = $expected } {
+                param($TargetDir, $Expected)
+                Mock Get-SystemState { @{ Registry = @{ Explorer = @{ ShowHidden = $true } } } }
+                Mock Save-Configuration { param([hashtable]$Config, [string]$Path) return $true }
+
+                $result = Invoke-Pull -Output $TargetDir -Spec @{}
+
+                $result.Registry.Explorer.ShowHidden | Should -BeTrue
+                Should -Invoke Save-Configuration -Times 1 -Exactly -ParameterFilter { $Path -eq $Expected }
             }
         }
 
@@ -480,6 +499,29 @@ Describe "Logging" {
         It "Should write log messages without error" {
             Import-Module (Join-Path $PSScriptRoot ".." "winspec" "logging.psm1") -Force
             { Write-Log -Level "INFO" -Message "Test message" } | Should -Not -Throw
+        }
+
+        It "Should be available inside utils when resolving missing spec paths" {
+            InModuleScope utils {
+                { Resolve-SpecPath -Path "Z:/definitely/missing/.winspec.ps1" } | Should -Not -Throw
+            }
+        }
+
+
+        It "Should not emit Write-Log resolution errors from the CLI pull path" {
+            $root = Resolve-Path (Join-Path $PSScriptRoot "..")
+            $fakeHome = Join-Path $TestDrive "cli-home"
+            $outputDir = Join-Path $TestDrive "cli-pull-output"
+            New-Item -ItemType Directory -Path $fakeHome, $outputDir -Force | Out-Null
+
+            $command = "`$env:USERPROFILE = '$fakeHome'; Remove-Item Env:WINSPEC_CONFIG -ErrorAction SilentlyContinue; Set-Location '$fakeHome'; & '$root/winspec/winspec.ps1' pull -Providers Registry -DryRun -Output '$outputDir'"
+            $text = pwsh -NoProfile -Command $command 2>&1 | Out-String
+
+            $LASTEXITCODE | Should -Be 0
+            $text | Should -Not -Match "Write-Log: The term 'Write-Log' is not recognized"
+            $text | Should -Not -Match "No existing spec file found"
+            $text | Should -Not -Match "Loading configuration"
+            $text | Should -Match "DryRun: would save spec to"
         }
     }
 }

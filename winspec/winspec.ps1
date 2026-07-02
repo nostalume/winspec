@@ -83,6 +83,7 @@ param (
 
 $ErrorActionPreference = 'Stop'
 $Script:WinspecRoot = $PSScriptRoot
+$ExplicitSpec = $PSBoundParameters.ContainsKey('Spec')
 
 $global:VerbosePreference = if ($PSBoundParameters['Verbose']) { 'Continue' } else { 'SilentlyContinue' }
 $global:DebugPreference = if ($PSBoundParameters['Debug']) { 'Continue' } else { 'SilentlyContinue' }
@@ -99,8 +100,21 @@ foreach ($m in $modules) {
     Import-Module (Join-Path $Script:WinspecRoot $m) -ErrorAction Stop -Force
 }
 
-$Spec = Resolve-SpecPath $Spec
-$ConfigPath = Split-Path $Spec -Parent
+if ($Command -eq "pull" -and -not $Spec -and $Output) {
+    if (Test-Path $Output -PathType Container) {
+        $ConfigPath = (Resolve-Path $Output).Path
+        $Spec = Join-Path $ConfigPath ".winspec.ps1"
+    }
+    else {
+        $ConfigPath = Split-Path $Output -Parent
+        if (-not $ConfigPath) { $ConfigPath = (Get-Location).Path }
+        $Spec = $Output
+    }
+}
+else {
+    $Spec = Resolve-SpecPath $Spec
+    $ConfigPath = Split-Path $Spec -Parent
+}
 
 function Show-Help {
     [CmdletBinding()]
@@ -495,7 +509,7 @@ function Show-Providers {
     )
 
     foreach ($cat in $categories) {
-        Write-Log -Level INFO $cat.Name
+        Write-Log -Level INFO -Message $cat.Name
 
         # Built-in providers
         $providers = Get-Providers -Type $cat.Type
@@ -511,7 +525,7 @@ function Show-Providers {
                 $info = & $module Get-ProviderInfo
             }
             catch {
-                Write-Log -Level WARN "Failed to load provider info: $name"
+                Write-Log -Level WARN -Message "Failed to load provider info: $name"
             }
 
             $description = if ($info.Description) {
@@ -523,10 +537,10 @@ function Show-Providers {
 
             $isUser = $ConfigPath -and $path.StartsWith($ConfigPath)
             if ($isUser) {
-                Write-Log -Level INFO "    $name - $description [User]"
+                Write-Log -Level INFO -Message "    $name - $description [User]"
             }
             else {
-                Write-Log -Level INFO "    $name - $description"
+                Write-Log -Level INFO -Message "    $name - $description"
             }
         }
     }
@@ -620,7 +634,7 @@ switch ($Command) {
             return
         }
         
-        if (Test-Path ($Spec)) {
+        if (($Apply -or $ExplicitSpec) -and (Test-Path ($Spec))) {
             $specContent = Get-Spec $Spec
         }
         else {
@@ -651,7 +665,7 @@ switch ($Command) {
         
         $specContent = Get-Spec $Spec
         if ($null -eq $specContent) {
-            Write-Log -Level "ERROR" "The spec is empty"
+            Write-Log -Level "ERROR" -Message "The spec is empty"
             exit 1
         }
         $pushParams = @{

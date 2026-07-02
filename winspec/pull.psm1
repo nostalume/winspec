@@ -12,6 +12,16 @@ Import-Module (Join-Path $PSScriptRoot "merge.psm1") -Force
 # PULL COMMAND - Export system state to config
 # =============================================================================
 
+function Resolve-PullOutputPath {
+    param([string]$Output)
+
+    if ($Output -and (Test-Path $Output -PathType Container)) {
+        return (Join-Path $Output ".winspec.ps1")
+    }
+
+    return $Output
+}
+
 function Invoke-Pull {
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -36,6 +46,7 @@ function Invoke-Pull {
     )
 
     Write-LogHeader -Title "WinSpec Pull"
+    $Output = Resolve-PullOutputPath -Output $Output
 
     $effectiveProviders = $Providers
     if (-not $effectiveProviders -and $Spec -and $Spec.ContainsKey("Providers")) {
@@ -43,17 +54,22 @@ function Invoke-Pull {
     }
 
     if ($effectiveProviders) {
-        Write-Log INFO "Using providers: $($effectiveProviders -join ', ')"
+        Write-Log -Level INFO -Message "Using providers: $($effectiveProviders -join ', ')"
     }
 
-    Write-Log INFO "Capturing system state..."
+    if ($Output -and (Test-Path $Output) -and -not $Apply) {
+        Write-Log -Level ERROR -Message "Spec already exists. Use -Apply to merge: $Output"
+        return @{ Success = $false; Reason = "OutputExists"; Path = $Output }
+    }
+
+    Write-Log -Level INFO -Message "Capturing system state..."
     $systemState = Get-SystemState -Providers $effectiveProviders -ConfigPath $ConfigPath
 
     if (-not $systemState -or $systemState.Count -eq 0) {
-        Write-Log WARN "No system state captured"
+        Write-Log -Level WARN -Message "No system state captured"
         return @{ Success = $false; Reason = "NoStateCaptured" }
     }
-    Write-Log INFO "Captured providers: $($systemState.Keys -join ', ')"
+    Write-Log -Level INFO -Message "Captured providers: $($systemState.Keys -join ', ')"
     $config = @{
         Name        = $Name
         Description = $Description
@@ -63,12 +79,7 @@ function Invoke-Pull {
         $config[$k] = $systemState[$k]
     }
     if ($Output -and (Test-Path $Output)) {
-        if (-not $Apply) {
-            Write-Log ERROR "Spec already exists. Use -Apply to merge."
-            return @{ Success = $false; Reason = "OutputExists"; Path = $Output }
-        }
-
-        Write-Log INFO "Merging captured state"
+        Write-Log -Level INFO -Message "Merging captured state"
         $merge = Merge-Configuration `
             -Base $Spec `
             -Incoming $config `
@@ -76,7 +87,7 @@ function Invoke-Pull {
             -Interactive:$Interactive
 
         if (-not $merge.Success) {
-            Write-Log ERROR "Merge failed with unresolved conflicts"
+            Write-Log -Level ERROR -Message "Merge failed with unresolved conflicts"
             return @{ Success = $false; Reason = "MergeFailed"; Merge = $merge }
         }
 
@@ -95,7 +106,7 @@ function Invoke-Pull {
         }
     }
     elseif ($Output -and $DryRun) {
-        Write-Log INFO "DryRun: would save spec to $Output"
+        Write-Log -Level INFO -Message "DryRun: would save spec to $Output"
     }
 
     return $config

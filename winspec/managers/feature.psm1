@@ -148,7 +148,7 @@ function Export-FeatureState {
 
     $result = @{}
     if (-not (Test-IsAdmin)) {
-        Write-Log -Level "ERROR" -Message "Windows feature export requires Administrator privileges"
+        Write-Log -Level "WARN" -Message "Skipping Windows feature export because Administrator privileges are required"
         return $result
     }
     try {
