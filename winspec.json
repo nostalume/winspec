@@ -1,10 +1,10 @@
 {
-  "version": "0.5.3",
+  "version": "0.5.4",
   "description": "A composable, declarative Windows configuration system",
   "homepage": "https://github.com/lvyuemeng/winspec",
   "license": "MIT",
-  "url": "https://github.com/lvyuemeng/winspec/archive/refs/tags/v0.5.3.zip",
-  "extract_dir": "winspec-0.5.3",
+  "url": "https://github.com/lvyuemeng/winspec/archive/refs/tags/v0.5.4.zip",
+  "extract_dir": "winspec-0.5.4",
   "bin": "winspec/winspec.ps1",
   "checkver": "github",
   "autoupdate": {
