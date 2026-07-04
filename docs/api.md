@@ -19,7 +19,7 @@ WinSpec exposes three practical APIs:
 From source:
 
 ```powershell
-git clone https://github.com/lvyuemeng/winspec.git
+git clone https://github.com/nostalume/winspec.git
 cd winspec
 ./winspec/winspec.ps1 help
 ```

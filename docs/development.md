@@ -23,7 +23,7 @@ Install-Module -Name Pester -Force -Scope CurrentUser -MinimumVersion 5.0
 ## Setup
 
 ```powershell
-git clone https://github.com/lvyuemeng/winspec.git
+git clone https://github.com/nostalume/winspec.git
 cd winspec
 
 # Verify the CLI loads

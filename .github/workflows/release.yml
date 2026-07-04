@@ -41,7 +41,7 @@ jobs:
           
           # Update winspec.json using jq
           jq --arg version "$TAG" \
-             --arg url "https://github.com/lvyuemeng/winspec/archive/refs/tags/v$TAG.zip" \
+             --arg url "https://github.com/nostalume/winspec/archive/refs/tags/v$TAG.zip" \
              --arg extract_dir "winspec-$TAG" \
              '.version = $version | .url = $url | .extract_dir = $extract_dir' \
              winspec.json > winspec.json.tmp && mv winspec.json.tmp winspec.json
