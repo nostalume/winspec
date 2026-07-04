@@ -100,6 +100,14 @@ foreach ($m in $modules) {
     Import-Module (Join-Path $Script:WinspecRoot $m) -ErrorAction Stop -Force -Scope Local
 }
 
+$Script:LoggingModule = Import-Module (Join-Path $Script:WinspecRoot "logging.psm1") -ErrorAction Stop -Force -Scope Local -PassThru
+$Script:WriteLogCommand = $Script:LoggingModule.ExportedCommands["Write-Log"]
+$Script:WriteLogHeaderCommand = $Script:LoggingModule.ExportedCommands["Write-LogHeader"]
+$Script:WriteLogSectionCommand = $Script:LoggingModule.ExportedCommands["Write-LogSection"]
+function Write-Log { param([string]$Level, [string]$Message) & $Script:WriteLogCommand -Level $Level -Message $Message }
+function Write-LogHeader { param([string]$Title) & $Script:WriteLogHeaderCommand -Title $Title }
+function Write-LogSection { param([string]$Name) & $Script:WriteLogSectionCommand -Name $Name }
+
 if ($Command -eq "pull" -and -not $Spec -and $Output) {
     if (Test-Path $Output -PathType Container) {
         $ConfigPath = (Resolve-Path $Output).Path
@@ -618,9 +626,9 @@ switch ($Command) {
             return
         }
         
-        $spec = Get-Spec -Path $Spec
+        $specContent = Get-Spec -Path $Spec
         $results = Invoke-Triggers `
-            -Config $spec `
+            -Config $specContent `
             -Triggers $Triggers `
             -ConfigPath $ConfigPath
 
@@ -722,18 +730,25 @@ switch ($Command) {
             exit 1
         }
         
-        $mergeParams = @{
-            BasePath     = $Base
-            IncomingPath = $Incoming
-            Strategy     = $Strategy
-            Interactive  = $Interactive
+        $baseContent = Get-Spec -Path $Base
+        $incomingContent = Get-Spec -Path $Incoming
+        if ($null -eq $baseContent -or $null -eq $incomingContent) {
+            Write-Log -Level "ERROR" -Message "Base and Incoming specs must be valid"
+            exit 1
         }
-        if ($Output) { $mergeParams['OutputPath'] = $Output }
+
+        $mergeParams = @{
+            Base        = $baseContent
+            Incoming    = $incomingContent
+            Strategy    = $Strategy
+            Interactive = $Interactive
+            DryRun      = $DryRun
+        }
+        if ($Output) { $mergeParams['Output'] = $Output }
         
-        Import-Module (Join-Path $Script:WinspecRoot "merge.psm1") -Force -Scope Local
-        $result = Merge-Configuration @mergeParams
+        $mergeModule = @(Import-Module (Join-Path $Script:WinspecRoot "merge.psm1") -Force -Scope Local -PassThru)[-1]
+        $result = & $mergeModule.ExportedCommands["Merge-Configuration"] @mergeParams
         if ($result) {
-            Write-Host (Format-MergeReport -MergeResult $result)
             if (-not $result.Success) {
                 exit 1
             }
