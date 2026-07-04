@@ -525,3 +525,34 @@ Describe "Logging" {
         }
     }
 }
+
+
+Describe "WinSpec command invocation" {
+    It "runs status through script path without missing logging commands" {
+        $root = Resolve-Path (Join-Path $PSScriptRoot "..")
+        $command = "& '$root/winspec/winspec.ps1' status -Providers Registry"
+        $text = pwsh -NoProfile -Command $command 2>&1 | Out-String
+
+        $LASTEXITCODE | Should -Be 0
+        $text | Should -Not -Match "The term 'Write-Log' is not recognized"
+        $text | Should -Match "System Status\(JSON\)"
+        $text | Should -Match '"Registry"'
+    }
+
+    It "runs status through a shim wrapper without missing logging commands" {
+        $root = Resolve-Path (Join-Path $PSScriptRoot "..")
+        $shim = Join-Path $TestDrive "winspec-shim.ps1"
+        @"
+`$path = '$root/winspec/winspec.ps1'
+if (`$MyInvocation.ExpectingInput) { `$input | & `$path @args } else { & `$path @args }
+exit `$LASTEXITCODE
+"@ | Set-Content -Path $shim -Encoding UTF8
+
+        $text = pwsh -NoProfile -File $shim status -Providers Registry 2>&1 | Out-String
+
+        $LASTEXITCODE | Should -Be 0
+        $text | Should -Not -Match "The term 'Write-Log' is not recognized"
+        $text | Should -Match "System Status\(JSON\)"
+        $text | Should -Match '"Registry"'
+    }
+}

@@ -97,7 +97,7 @@ $modules = @(
     "checkpoint.psm1"
 )
 foreach ($m in $modules) {
-    Import-Module (Join-Path $Script:WinspecRoot $m) -ErrorAction Stop -Force
+    Import-Module (Join-Path $Script:WinspecRoot $m) -ErrorAction Stop -Force -Scope Local
 }
 
 if ($Command -eq "pull" -and -not $Spec -and $Output) {
@@ -554,14 +554,14 @@ switch ($Command) {
             return
         }
         
-        Write-Log INFO "Capturing system state..."
+        Write-Log -Level INFO -Message "Capturing system state..."
 
         $systemState = Get-SystemState -Providers $Providers
         if (-not $systemState -or $systemState.Count -eq 0) {
-            Write-Log WARN "No system state captured"
+            Write-Log -Level WARN -Message "No system state captured"
             return
         }
-        Write-Log INFO "Captured providers: $($systemState.Keys -join ', ')"
+        Write-Log -Level INFO -Message "Captured providers: $($systemState.Keys -join ', ')"
         if ($Output) {
             if ($PSCmdlet.ShouldProcess($Output, "Save spec")) {
                 Save-Configuration `
@@ -653,7 +653,7 @@ switch ($Command) {
         if ($Description) { $pullParams['Description'] = $Description }
         if ($ConfigPath) { $pullParams['ConfigPath'] = $ConfigPath }
         
-        Import-Module (Join-Path $Script:WinspecRoot "pull.psm1") -ErrorAction Stop -Force
+        Import-Module (Join-Path $Script:WinspecRoot "pull.psm1") -ErrorAction Stop -Force -Scope Local
         Invoke-Pull @pullParams
     }
     
@@ -677,7 +677,7 @@ switch ($Command) {
         if ($DryRun) { $pushParams['DryRun'] = $true }
         if ($Checkpoint) { $pushParams['Checkpoint'] = $true }
         
-        Import-Module (Join-Path $Script:WinspecRoot "push.psm1") -Force
+        Import-Module (Join-Path $Script:WinspecRoot "push.psm1") -Force -Scope Local
         $result = Invoke-Push @pushParams
         if (-not $result.Success) { exit 1 }
     }
@@ -702,7 +702,7 @@ switch ($Command) {
         if ($Providers) { $diffParams['Providers'] = $Providers }
         if ($ConfigPath) { $diffParams['ConfigPath'] = $ConfigPath }
         
-        Import-Module (Join-Path $Script:WinspecRoot "diff.psm1") -Force
+        Import-Module (Join-Path $Script:WinspecRoot "diff.psm1") -Force -Scope Local
         Invoke-Diff @diffParams
     }
     
@@ -730,7 +730,7 @@ switch ($Command) {
         }
         if ($Output) { $mergeParams['OutputPath'] = $Output }
         
-        Import-Module (Join-Path $Script:WinspecRoot "merge.psm1") -Force
+        Import-Module (Join-Path $Script:WinspecRoot "merge.psm1") -Force -Scope Local
         $result = Merge-Configuration @mergeParams
         if ($result) {
             Write-Host (Format-MergeReport -MergeResult $result)
@@ -741,7 +741,7 @@ switch ($Command) {
     }
     
     "sandbox" {
-        Import-Module (Join-Path $Script:WinspecRoot "sandbox.psm1") -Force
+        Import-Module (Join-Path $Script:WinspecRoot "sandbox.psm1") -Force -Scope Local
 
         if ($Enter) {
             Enter-Sandbox -Mode $Mode -Snapshot $Snapshot
