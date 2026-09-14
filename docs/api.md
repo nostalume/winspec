@@ -1,622 +1,267 @@
-# WinSpec API Guide
+# WinSpec API
 
-This is the user-facing API for WinSpec: commands, specification shape, provider sections, and extension points. It avoids internal architecture detail; see [architecture.md](architecture.md) for concepts and [development.md](development.md) for contributor workflow.
+This document is the normative public contract for specification schema version
+1, command result schema version 1, and the CLI. The external manifest and
+process protocol version 1 are specified in
+[Building WinSpec providers](provider-development.md).
+Files and functions under `winspec/` are implementation details unless a public
+document names their command, data, package, or wire behavior.
 
----
+## Command grammar
 
-## What WinSpec exposes
-
-WinSpec exposes three practical APIs:
-
-1. **CLI API**: `winspec <command> [options]` for pull, push, diff, merge, status, validation, sandbox, triggers, and rollback.
-2. **Specification API**: PowerShell `.ps1` files returning hashtables.
-3. **Provider API**: PowerShell module contracts for adding managers and triggers.
-
----
-
-## Installation and invocation
-
-From source:
-
-```powershell
-git clone https://github.com/nostalume/winspec.git
-cd winspec
-./winspec/winspec.ps1 help
+```text
+winspec capture [output] [-Providers names] [-ProviderPath roots] [-Force] [-Json]
+winspec status [spec] [-Providers names] [-ProviderPath roots] [-Json]
+winspec validate [spec] [-ProviderPath roots] [-Json]
+winspec diff [spec] [-Against spec] [-Providers names] [-ProviderPath roots] [-Json]
+winspec apply [spec] [-Providers names] [-ProviderPath roots] [-DryRun] [-Checkpoint] [-Json]
+winspec run <name> [-Spec spec] [options] [-- arguments]
+winspec run <path|http(s)-uri> [-Interactive] [-Sha256 hex] [options] [-- arguments]
+winspec workflow <name> [-Spec spec] [-DryRun] [-Json]
+winspec merge <base> <incoming> [-Output path] [-Strategy auto|union|ours|theirs] [-Force]
+winspec providers [-ProviderPath roots] [-Json]
+winspec sandbox [-Enter|-Exit|-List] [-Mode Mock|DryRun] [-Snapshot name]
+winspec rollback (-Last|-SequenceNumber n) [-DryRun]
+winspec help [command]
 ```
 
-After Scoop installation or PATH setup, examples may use `winspec` instead of `./winspec/winspec.ps1`.
-
-Most live-system operations require Administrator privileges. Providers that require elevation fail explicitly when the current process is not elevated; WinSpec does not silently mutate services from a non-admin process.
-
----
-
-## CLI API
-
-### Command summary
-
-| Command | Purpose |
-| --- | --- |
-| `pull` | Capture current system state into a spec file. |
-| `push` | Apply a spec to the system. |
-| `diff` | Compare a spec against the live system or another spec. |
-| `merge` | Merge two specs. |
-| `status` | Print current provider state as JSON. |
-| `providers` | List discovered built-in and user providers. |
-| `validate` | Validate a spec without applying it. |
-| `trigger` | Execute selected non-idempotent triggers. |
-| `sandbox` | Enter, inspect, list, or exit sandbox mode. |
-| `rollback` | Restore a Windows System Restore checkpoint. |
-| `help` | Show general or command-specific help. |
-
-Global options include:
-
-| Option | Meaning |
-| --- | --- |
-| `-Spec <path>` | Specification file path. |
-| `-Output <path>` | Output path for commands that write files. |
-| `-Providers <names>` | Restrict operation to named providers. |
-| `-DryRun` | Preview changes without applying. |
-| `-Help` | Show help for the selected command. |
-
-### `pull`
-
-Capture live state into a configuration file.
-
-```powershell
-# Pull to the resolved default spec path
-winspec pull
-
-# Pull to a specific file
-winspec pull -Output ./my-config.ps1
-
-# Pull only selected providers
-winspec pull -Providers Registry,Feature -Output ./registry-and-features.ps1
-
-# Preview capture without writing
-winspec pull -DryRun
-
-# Interactive selection
-winspec pull -Interactive
-
-# Merge captured state into an existing output spec
-winspec pull -Output ./my-config.ps1 -Apply
-```
-
-Important options:
-
-| Option | Meaning |
-| --- | --- |
-| `-Output` | Destination file. Defaults to the resolved spec path. |
-| `-Providers` | Provider names to capture. |
-| `-Interactive` | Select captured items interactively. |
-| `-Apply` | Merge with existing output instead of replacing blindly. |
-
-Output format is extension-driven by the destination file path (`.json` writes JSON; other extensions write PowerShell hashtable syntax). `pull` uses the same provider universe as push/diff: built-in managers plus user managers under the resolved config path when one is supplied.
-
-Expected pull failures are structured: no captured provider state returns `Reason = "NoStateCaptured"`, existing output without `-Apply` returns `Reason = "OutputExists"`, and merge conflicts return `Reason = "MergeFailed"`.
-
-### `push`
-
-Apply declarative sections and optionally selected triggers from a spec.
-
-```powershell
-# Apply declarative config
-winspec push -Spec ./my-config.ps1
-
-# Preview changes
-winspec push -Spec ./my-config.ps1 -DryRun
-
-# Create a restore point first
-winspec push -Spec ./my-config.ps1 -Checkpoint
-
-# Apply only selected providers
-winspec push -Spec ./my-config.ps1 -Providers Registry,Feature
-
-# Run selected triggers while pushing
-winspec push -Spec ./my-config.ps1 -Triggers activation,debloat
-```
-
-Notes:
-
-- Declarative managers are idempotent and test current state before applying.
-- Triggers are non-idempotent and only execute when selected.
-- Use `-DryRun`, sandbox mode, or `-Checkpoint` for safety.
-- `push` reports top-level `Success = $false` when any provider or trigger returns `Status = "Error"`.
-- If `-Checkpoint` is requested and checkpoint creation fails, push aborts before provider/trigger mutation and returns `Reason = "CheckpointFailed"` with the checkpoint failure details.
-
-### `diff`
-
-Compare desired state against live state or another spec.
-
-```powershell
-# Compare spec against live system
-winspec diff -Spec ./my-config.ps1
-
-# Compare two specs
-winspec diff -Spec ./my-config.ps1 -Against ./base-config.ps1
-
-# Compare only one provider
-winspec diff -Spec ./my-config.ps1 -Providers Registry
-```
-
-Diff output groups entries into added, removed, changed, and equal items.
-
-### `merge`
-
-Merge two specification files.
-
-```powershell
-# Auto merge
-winspec merge -Base ./base.ps1 -Incoming ./custom.ps1 -Output ./merged.ps1
-
-# Union merge
-winspec merge -Base ./base.ps1 -Incoming ./custom.ps1 -Strategy union
-
-# Prefer base or incoming on conflicts
-winspec merge -Base ./base.ps1 -Incoming ./custom.ps1 -Strategy ours
-winspec merge -Base ./base.ps1 -Incoming ./custom.ps1 -Strategy theirs
-
-# Interactive conflict resolution
-winspec merge -Base ./base.ps1 -Incoming ./custom.ps1 -Interactive
-```
-
-Available strategies: `auto`, `union`, `ours`, `theirs`.
-
-### `status`
-
-Print current state captured by providers.
-
-```powershell
-winspec status
-winspec status -Providers Registry,Feature
-winspec status -Output ./current-state.ps1
-```
-
-The command prints JSON to the console. With `-Output`, it also saves captured state.
-
-### `providers`
-
-List discovered declarative managers and triggers.
-
-```powershell
-winspec providers
-```
-
-WinSpec lists built-in providers and providers found under the resolved config path.
-
-### `validate`
-
-Validate a specification without applying it.
-
-```powershell
-winspec validate -Spec ./my-config.ps1
-```
-
-Validation checks PowerShell loading and the expected top-level spec shape.
-
-### `trigger`
-
-Execute selected triggers directly.
-
-```powershell
-# Run one trigger
-winspec trigger activation
-
-# Run multiple triggers
-winspec trigger activation,debloat
-
-# Run all discovered triggers
-winspec trigger *
-```
-
-Triggers can read values from the `Trigger` section of the spec or from command input. They are not idempotent; review trigger behavior before running.
-
-### `sandbox`
-
-Manage sandbox state.
-
-```powershell
-# Show sandbox status
-winspec sandbox
-
-# Enter mock sandbox
-winspec sandbox -Enter -Mode Mock
-
-# Enter dry-run sandbox
-winspec sandbox -Enter -Mode DryRun
-
-# List snapshots
-winspec sandbox -List
-
-# Exit sandbox
-winspec sandbox -Exit
-```
-
-Sandbox mode lets providers simulate or report changes without modifying live state. `DryRun` reports pending changes and discards its active sandbox context at the end of `push`; `Mock` records simulated provider changes in the sandbox context and can write sandbox history on exit.
-
-### `checkpoint` / `rollback`
-
-`winspec push -Checkpoint` creates a Windows System Restore point before applying a spec. Checkpoint creation does not enable System Restore implicitly and requires the current process to be elevated. If System Restore is disabled, checkpoint creation returns `Success = $false`, `Reason = "SystemRestoreDisabled"`; if the process is not elevated, it returns `Reason = "RequiresAdministrator"`. A failed requested checkpoint aborts push before provider or trigger mutation.
-
-Restore a Windows System Restore checkpoint.
-
-```powershell
-# Roll back to latest WinSpec checkpoint
-winspec rollback -Last
-
-# Roll back to a specific restore point sequence number
-winspec rollback -SequenceNumber 5
-```
-
-Rollback is guarded by PowerShell `ShouldProcess`; `-WhatIf` does not call `Restore-Computer` and returns `Success = $false`, `Reason = "WhatIf"`. Other structured failure reasons include `SystemRestoreDisabled`, `NoRestorePoints`, `RollbackTargetRequired`, `RestorePointNotFound`, and `RestoreFailed`.
-
----
-
-## Specification API
-
-A spec is a PowerShell file that returns a hashtable:
-
-```powershell
-@{
-    Name = "developer-workstation"
-    Description = "My Windows developer setup"
-
-    Import = @(
-        "./base.ps1"
-    )
-
-    Registry = @{
-        Clipboard = @{ EnableHistory = $true }
-        Explorer  = @{ ShowHidden = $true; ShowFileExt = $true }
-        Theme     = @{ AppTheme = "dark"; SystemTheme = "dark" }
-        Desktop   = @{ MenuShowDelay = "0" }
-    }
-
-    Feature = @{
-        "Microsoft-Windows-Subsystem-Linux" = "enabled"
-        "VirtualMachinePlatform" = "enabled"
-    }
-
-    Service = @{
-        wuauserv = @{ State = "stopped"; Startup = "disabled" }
-    }
-
-    Trigger = @("activation", "debloat", "office")
-
-    TriggerConfig = @{
-        activation = @{ Method = "KMS38" }
-        debloat    = @{ Silent = $true }
-        office     = @{ Path = "C:\Installers"; Cache = $true }
-    }
-}
-```
-
-### Top-level fields
-
-| Field | Type | Purpose |
+Commands and options are case-insensitive. `-Providers` and `-ProviderPath`
+accept comma-separated values and may be repeated. Empty provider names are
+invalid. `--` ends WinSpec parsing and is valid only for `run`; every following
+token is forwarded as one literal argument. Unknown commands, options,
+combinations, and extra operands fail before effects.
+
+`-TimeoutSeconds` defaults to 300 and accepts 1–3600. `-Json` reserves stdout for
+one result document. It is incompatible with interactive execution. `-Verbose`
+and `-Debug` are accepted common switches; their diagnostic streams are not part
+of the JSON document.
+
+| Command | Operand and selection | Options and defaults |
 | --- | --- | --- |
-| `Name` | string | Human-readable spec name. |
-| `Description` | string | Description for maintainers/logging. |
-| `Import` | array | Other specs to import before this spec. |
-| `Providers` | array | Optional provider allow-list used by some operations. |
-| `Registry` | hashtable | Registry category/property state. |
-| `Feature` | hashtable | Windows Optional Feature state. |
-| `Service` | hashtable | Windows service state and startup mode. |
-| `Trigger` | string or array | Explicit non-idempotent action names to run. |
-| `TriggerConfig` | hashtable | Parameter maps keyed by trigger name. |
+| `capture` | optional output; default user `.winspec.psd1` | `-Providers`; `-ProviderPath`; without names, observes core State; existing output needs `-Force` |
+| `status` | optional spec | `-Providers`; `-ProviderPath`; defaults to spec sections, or core State without a spec |
+| `validate` | optional spec | `-ProviderPath`; validates the common external envelope |
+| `diff` | optional desired spec | `-Against`; `-Providers`; `-ProviderPath`; otherwise compares with the machine |
+| `apply` | optional desired spec | `-Providers`; `-ProviderPath`; `-DryRun`; `-Checkpoint` |
+| `run` | exactly one Action name, local path, or HTTP(S) URI | name uses `-Spec`; local may use `-Interactive`; remote may use `-Sha256`; accepts `--` |
+| `workflow` | exactly one Workflow name | optional `-Spec`; `-DryRun` |
+| `merge` | base and incoming specs | `-Output` defaults to stdout; strategy defaults `auto`; existing output needs `-Force` |
+| `providers` | no operand | `-ProviderPath` adds discovery roots |
+| `sandbox` | no operand | exactly one of `-Enter`, `-Exit`, `-List`; mode defaults `Mock`; snapshot defaults `default` |
+| `rollback` | no operand | exactly one of `-Last` or positive `-SequenceNumber`; optional `-DryRun` |
 
-Omit sections you do not want WinSpec to manage.
+`-Spec` is valid only for a named Action or Workflow. `-Sha256` is valid only for
+a direct remote Script; a named remote Script stores it in `With`. `-Interactive`
+is valid only for a direct local Script; a named local Script stores it in
+`With`. `-Providers` applies only to State commands. `-ProviderPath` applies to
+`capture`, `status`, `validate`, `diff`, `apply`, `run`, `workflow`, and
+`providers`. `-Checkpoint` applies only to `apply`; a Workflow stores its
+checkpoint request in the spec.
 
-### Config path resolution
+An omitted spec resolves to
+`%USERPROFILE%\.config\winspec\.winspec.psd1`, then `.winspec.json`. If both
+exist, WinSpec returns `AmbiguousDefaultSpec`. It does not walk parent
+directories. An omitted capture output is the PSD1 default path.
 
-When no explicit path is supplied, WinSpec resolves specs in this order:
+## Specification data model
 
-1. explicit `-Spec`/`-Output` argument,
-2. `$env:WINSPEC_CONFIG`,
-3. user config directory under `~/.config/winspec/`,
-4. `.winspec.ps1` in the current directory.
+PSD1 and JSON admit maps, arrays, strings, Booleans, signed 64-bit integers,
+finite numbers, and null. A source file is limited to 4 MiB and nesting depth 64.
+Map keys are strings and duplicates are rejected case-insensitively. The root must
+be a map. A `.ps1` file is never configuration.
 
-### Import resolution
+PSD1 is loaded only through `Import-PowerShellDataFile`. JSON receives a duplicate
+key scan before conversion. Both normalize to the same data model.
 
-`Import` entries can be:
+### Composition and paths
 
-- absolute paths,
-- paths relative to the current spec,
-- paths relative to the config directory,
-- built-in spec names where supported.
+`Include` is a string or array of strings. Each path resolves from its including
+file. Included documents compose first-to-last; the local document composes last.
+Maps merge recursively. Arrays and scalar values replace. Cycles and invalid
+included files fail the complete load.
 
-Later/importing values override or extend earlier imported values.
+The root spec passed to a named `run` or `workflow` owns operational relative
+paths. Local Script `File`, Office `Path`, and Workflow Capture `Output` resolve
+from that root spec's directory. A Capture step cannot overwrite the root or any
+loaded include, even with `Force`.
 
----
+### Root fields
 
-## Built-in provider sections
+After composition, schema version 1 accepts:
 
-### `Registry`
+- required integer `SchemaVersion = 1`;
+- optional string `Name` and `Description`;
+- `Registry`, `Service`, and `Feature` core State maps;
+- one same-named map for each discovered external State provider;
+- optional `Actions` map;
+- optional `Workflows` map.
 
-Manages friendly registry categories.
+Unknown root fields fail. Root `Providers`, `Trigger`, `TriggerConfig`, and
+`Import` have no compatibility meaning. Provider selection belongs to the CLI or
+a Workflow step.
 
-```powershell
-Registry = @{
-    Clipboard = @{ EnableHistory = $true }
-    Explorer  = @{ ShowHidden = $true; ShowFileExt = $true }
-    Taskbar   = @{ Alignment = "left"; ShowTaskViewButton = $false; SearchMode = "icon" }
-    Start     = @{ ShowRecommendations = $false; ShowRecentlyAddedApps = $true }
-    Theme     = @{ AppTheme = "dark"; SystemTheme = "dark" }
-    Desktop   = @{ MenuShowDelay = "0"; ForegroundLockTimeout = 0 }
-}
-```
+The complete normative Registry, Service, and Feature configuration tables,
+permissions, selection defaults, and restart behavior are in
+[Built-in State providers](state-providers.md). Unknown core State fields or
+deterministically invalid values fail validation. External State maps are passed
+to their selected package.
 
-Built-in categories:
+## Action schema
 
-| Category | Common fields | Scope | Restart hint |
-| --- | --- | --- | --- |
-| `Clipboard` | `EnableHistory` | `HKCU` | none |
-| `Explorer` | `ShowHidden`, `ShowFileExt` | `HKCU` | Explorer restart |
-| `Taskbar` | `Alignment`, `ShowTaskViewButton`, `SearchMode`, `ShowWidgets`, `ShowChat` | `HKCU` | Explorer restart |
-| `Start` | `ShowRecommendations`, `ShowRecentlyAddedApps`, `ShowRecentlyOpenedItems` | `HKCU` | Explorer restart |
-| `Theme` | `AppTheme`, `SystemTheme` | `HKCU` | none |
-| `Desktop` | `MenuShowDelay`, `ForegroundLockTimeout` | `HKCU` | sign out |
-
-Registry specs are validated against `winspec/registry-maps.psm1`: unknown categories/properties are rejected, mapped values must be one of their declared `AllowedValues`, and raw `DWord`/`String` properties must match their expected PowerShell value type.
-
-See [reference.md](reference.md#registry) for concrete registry fields and translations.
-
-### `Feature`
-
-Manages Windows Optional Features.
-
-```powershell
-Feature = @{
-    "Microsoft-Windows-Subsystem-Linux" = "enabled"
-    "VirtualMachinePlatform" = "enabled"
-    "Containers" = "disabled"
-}
-```
-
-Values: `"enabled"`, `"disabled"`.
-
-Safety behavior:
-
-- Live feature export and mutation require Administrator privileges.
-- Without elevation, feature export returns no feature state and logs an error; live feature apply returns `Status = "Error"`, `Reason = "RequiresAdministrator"`.
-- The Feature provider no longer spawns generated elevated scripts for export/apply.
-
-See [reference.md](reference.md#feature) for feature values and discovery commands.
-
-### `Service`
-
-Manages Windows services.
+Every named Action uses one common envelope:
 
 ```powershell
-Service = @{
-    wuauserv = @{ State = "stopped"; Startup = "disabled" }
-    WinDefend = @{ State = "running"; Startup = "automatic" }
-}
-```
-
-Fields:
-
-| Field | Values |
-| --- | --- |
-| `State` | `"running"`, `"stopped"` |
-| `Startup` | `"automatic"`, `"manual"`, `"disabled"` |
-
-Safety behavior:
-
-- Live service changes require Administrator privileges. Without elevation, the Service provider returns `Status = "Error"`, `Reason = "RequiresAdministrator"`, and does not call `Set-Service`, `Start-Service`, or `Stop-Service`.
-- The built-in Service provider only manages a small allow-list of Windows services. Services outside that allow-list return `Reason = "ServiceNotManaged"` and are not mutated.
-- Default service export and explicit `Export-ServiceState -ServiceNames ...` filter to that allow-list.
-
-See [reference.md](reference.md#service) for the current allow-list and discovery commands.
-
-### `Trigger` and `TriggerConfig`
-
-`Trigger` selects explicit non-idempotent actions. `TriggerConfig` configures those actions with parameter maps keyed by trigger name.
-
-```powershell
-Trigger = @("activation", "debloat", "office")
-
-TriggerConfig = @{
-    activation = @{ Method = "KMS38" }
-    debloat    = @{ Silent = $true }
-    office     = @{ Path = "C:\Installers"; Cache = $true }
-}
-```
-
-Built-in triggers:
-
-| Trigger | Config parameters | Behavior |
-| --- | --- | --- |
-| `activation` | `Method` | Windows/Office activation helper. |
-| `debloat` | `Silent` | Debloat helper. |
-| `office` | `Path`, `Cache` | Office installer download/setup helper. |
-
-Security note: remote/download triggers must stay opt-in and respect native PowerShell execution controls such as `-WhatIf`/dry-run. Runtime confirmation belongs to command execution, not to stored trigger config.
-
----
-
-## Provider extension API
-
-### Declarative manager module
-
-Create a module under `winspec/managers/<name>.psm1` or a user config managers directory.
-
-Required shape:
-
-```powershell
-function Get-ProviderInfo {
-    return @{
-        Name = "MyProvider"
-        Type = "Declarative"
-        Description = "Manages my subsystem"
+Actions = @{
+    actionName = @{
+        Use = 'ActionProviderName'
+        With = @{ }
     }
 }
-
-function Export-MyProviderState {
-    return @{}
-}
-
-function Compare-MyProviderState {
-    param($System, $Desired)
-    return @()
-}
-
-function Test-MyProviderState {
-    param([hashtable]$Desired)
-    return $true
-}
-
-function Set-MyProviderState {
-    [CmdletBinding(SupportsShouldProcess = $true)]
-    param([hashtable]$Desired)
-    return @{ Status = "Applied" }
-}
-
-Export-ModuleMember -Function @(
-    "Get-ProviderInfo",
-    "Export-MyProviderState",
-    "Compare-MyProviderState",
-    "Test-MyProviderState",
-    "Set-MyProviderState"
-)
 ```
 
-### Trigger module
+`Use` is a required nonempty string selecting one discovered Action provider.
+`With` is an optional map and defaults empty. No flat provider fields are valid.
+For an external provider, WinSpec forwards `With` unchanged as
+`input.configuration`; the provider package owns its field meanings.
 
-Create a module under `winspec/triggers/<name>.psm1` or a user config triggers directory.
+### Core Script Action
+
+Script `With` accepts only:
+
+- exactly one of `File` or `Uri`, each a nonempty string;
+- optional `Args`, an array of strings, default empty;
+- optional `Sha256`, exactly 64 hexadecimal characters and valid only with
+  `Uri`;
+- optional Boolean `Interactive`, default false; true is valid only with `File`.
+
+Configured arguments precede CLI `--` arguments. No shell command string is
+constructed or evaluated. `File` resolves from the owning spec. Direct paths
+resolve from the caller's current directory.
+
+An unpinned remote Script requires HTTPS. Supplying `Sha256` verifies exact bytes
+and also permits HTTP. Every unpinned redirect must remain HTTPS. Remote content
+is streamed to a temporary file while hashing, limited to 16 MiB and five
+redirects, run only out of process, and deleted afterward. Remote Scripts cannot
+be interactive.
+
+Dry-run is offline and reports `Integrity` as `Unpinned` or `Pinned`. Run also
+reports requested and final URI, received byte count and SHA-256, and
+`DigestVerified`. An unpinned received digest is audit identity after acquisition,
+not proof that the content matched an earlier review.
+
+Dry-run never starts Script code. A local noninteractive dry-run requires the
+file to exist and returns an opaque plan. Noninteractive run uses the current
+PowerShell host with `-NoProfile -NonInteractive`, captures stdout and stderr up
+to 1 MiB each, reports truncation, waits for the immediate child, and returns its
+exit. Interactive run inherits the terminal and captures neither stream; it
+cannot use JSON or dry-run. Detached descendants are outside the receipt.
+
+See [Using WinSpec](usage.md#run-local-scripts) for examples.
+
+## Workflow schema and semantics
+
+A Workflow contains a nonempty ordered `Steps` array and optional Boolean
+`Checkpoint` (default false). Each step has exactly one tag:
 
 ```powershell
-function Get-ProviderInfo {
-    return @{
-        Name = "mytrigger"
-        Type = "Trigger"
-        Description = "Runs my explicit action"
+Workflows = @{
+    setup = @{
+        Checkpoint = $false
+        Steps = @(
+            @{ Apply = @{ Providers = @('Registry', 'Service') } }
+            @{ Run = 'actionName' }
+            @{ Capture = @{
+                Output = './observed.winspec.psd1'
+                Providers = @('Registry')
+                Force = $false
+            } }
+        )
     }
 }
+```
 
-function Invoke-Trigger {
-    [CmdletBinding(SupportsShouldProcess = $true)]
-    param(
-        [switch]$ExampleFlag,
-        [string]$Mode = "default"
-    )
+`Apply.Providers` is optional; `Run` is one Action name; Capture requires an
+`Output` string and accepts optional provider names and Boolean `Force`. Unknown
+fields and empty provider names fail.
 
-    return @{
-        Status = "Success"
-        Message = "Completed"
-    }
+Before any effect, WinSpec admits every step, name, provider kind/capability,
+output conflict, and checkpoint capability. Provider-specific semantic
+validation occurs through `preview` where available or immediately before that
+provider's run. One requested checkpoint is created before the first effect.
+Steps then run sequentially. The first failure stops execution and all remaining
+steps receive `Skipped` receipts.
+
+Dry-run creates no checkpoint or output. State steps capture and compare only.
+Action providers use `preview` where declared; otherwise the plan is opaque.
+Capture output never feeds a later step. Workflow nesting, retries, parallel
+steps, arbitrary commands, and implicit rollback are invalid.
+
+## State operations
+
+`capture` observes selected State and atomically publishes a data-only spec.
+`status` observes without publication. `diff` compares desired State with the
+machine or `-Against`; it returns exit 1 when different. `apply` captures and
+compares first, then converges only selected providers. If already equal it
+returns `Unchanged` without a checkpoint. External State providers are rechecked
+immediately before their apply operation.
+
+Explicit `-Providers` selects exactly those State providers. When omitted from
+a spec-scoped command or Workflow State step, selection is the State sections
+present in that spec. Unconstrained `capture` and `status` select only core
+Registry, Service, and Feature; discovering an external package never starts it.
+See [Built-in State providers](state-providers.md) for core configuration and
+per-resource failure behavior.
+
+`apply` never executes Actions. `run` executes exactly one Action. `workflow` is
+the only multi-step surface. No command elevates, enables System Restore, retries
+an uncertain effect, or automatically rolls back.
+
+## Result document and exits
+
+With `-Json`, stdout is exactly one UTF-8 JSON object:
+
+```json
+{
+  "schemaVersion": 1,
+  "command": "run",
+  "status": "Succeeded",
+  "results": {},
+  "diagnostics": []
 }
-
-Export-ModuleMember -Function @("Get-ProviderInfo", "Invoke-Trigger")
 ```
 
+`diagnostics` items contain at least `severity`, `code`, and `message` at the
+command boundary. Provider diagnostics contain `code` and `message` and are
+nested in that provider result. Status vocabulary is `Succeeded`, `Unchanged`,
+`Different`, `Planned`, `Skipped`, and `Failed`.
 
----
+| Exit | Meaning |
+| ---: | --- |
+| 0 | Successful operation, unchanged State, or successful plan |
+| 1 | Comparison succeeded and found differences |
+| 2 | Command, option, path, data, schema, selection, manifest, or wire admission failed |
+| 3 | Provider, Action, checkpoint, publication, or rollback failed |
+| 4 | Cancellation or timeout at the command boundary |
 
-## Custom behavior model
+## External provider packages
 
-Use this model when you want to configure or extend WinSpec behavior.
+External providers are trusted programs discovered from static manifests and run
+through a bounded, versioned process protocol. The complete contract—including
+package layout, discovery, manifest fields, operation-specific inputs and legal
+statuses, response validation, interaction, cleanup, and complete Action and
+State examples—is
+[Building WinSpec providers](provider-development.md).
 
-### Declarative managers vs triggers
+Public `validate` checks the common Action/State envelope without starting
+provider code. It reports `ProviderValidationUnavailable` where provider-owned
+semantic validation cannot run through Action preview. Process isolation contains
+WinSpec process and wire failures; it is not a security sandbox.
 
-| Kind | Purpose | Spec location | Module location | Runtime behavior |
-| --- | --- | --- | --- | --- |
-| Declarative manager | Idempotent desired state | Provider-named sections such as `Registry`, `Feature`, `Service`, or your provider name | `managers/<name>.psm1` | Export, compare, test, then apply missing changes. |
-| Trigger | Explicit non-idempotent action | `Trigger` + `TriggerConfig` | `triggers/<name>.psm1` | Runs only when selected. Parameters are splatted into typed `Invoke-Trigger` params. |
+## Bundled Action providers
 
-A declarative provider owns one top-level spec section:
-
-```powershell
-MyProvider = @{
-    Setting = "value"
-}
-```
-
-A trigger is split into selection and configuration:
-
-```powershell
-Trigger = @("mytrigger")
-
-TriggerConfig = @{
-    mytrigger = @{ Mode = "safe"; ExampleFlag = $true }
-}
-```
-
-Do not put trigger parameter maps inside `Trigger`; `Trigger` only names actions to run.
-
-### Provider discovery and config path
-
-WinSpec discovers built-in providers from its installation and user providers from the resolved config path:
-
-```text
-<config>/managers/*.psm1
-<config>/triggers/*.psm1
-```
-
-Each provider module must export `Get-ProviderInfo`. The `Name` returned by `Get-ProviderInfo` is the public spec section name for managers and the public selection name for triggers.
-
-### Runtime controls are not stored config
-
-Runtime controls such as `-WhatIf`, `-Confirm`, `-Verbose`, and `-ErrorAction` are command-line execution controls. They are forwarded through orchestration when supported, but they do not belong in stored spec fields.
-
-Use:
-
-```powershell
-winspec push -Spec ./my-config.ps1 -WhatIf
-winspec push -Spec ./my-config.ps1 -DryRun
-```
-
-not persistent config fields such as `ConfirmRemoteExecution`.
-
-### State workflow mental model
-
-For declarative managers, WinSpec follows this lifecycle:
-
-```text
-pull/status: discover managers -> Export-<Name>State -> spec-shaped state
-
-diff:        discover managers -> Compare-<Name>State -> Added/Removed/Changed/Equal rows
-
-push:        discover managers -> Test-<Name>State -> Set-<Name>State when needed
-```
-
-For triggers, WinSpec follows this lifecycle:
-
-```text
-selection:   CLI -Triggers overrides Spec.Trigger; otherwise Spec.Trigger selects actions
-
-config:      TriggerConfig.<name> becomes typed Invoke-Trigger parameters
-
-execution:   import exact trigger module -> invoke its exported Invoke-Trigger command
-```
-
----
-
-## Common workflows
-
-### New machine setup
-
-```powershell
-# On a configured machine
-winspec pull -Output ./my-setup.ps1
-
-# On a new machine
-winspec diff -Spec ./my-setup.ps1
-winspec push -Spec ./my-setup.ps1 -Checkpoint
-```
-
-### Daily maintenance
-
-```powershell
-winspec diff -Spec ./my-config.ps1
-winspec pull -Output ./current-state.ps1
-winspec merge -Base ./my-config.ps1 -Incoming ./current-state.ps1 -Output ./updated.ps1
-```
-
-### Safe provider development smoke
-
-```powershell
-winspec providers
-winspec validate -Spec ./my-config.ps1
-winspec push -Spec ./my-config.ps1 -DryRun
-```
+`MicrosoftActivation`, `WindowsDebloat`, and `OfficeDeployment` are packaged
+protocol-version-1 Action providers shipped and automatically discovered with
+WinSpec. They remain inert until selected. Their exact `With` fields, endpoints,
+preview/run behavior, interaction, privileges, acquisition limits, nested-content
+boundary, and receipts are owned by
+[Bundled Action providers](bundled-providers.md).

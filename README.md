@@ -1,367 +1,183 @@
 # WinSpec
 
-> A composable, declarative Windows configuration system.
+WinSpec is a declarative Windows setup tool with a deliberately small execution
+model: describe convergent machine **State**, name explicit one-shot **Actions**,
+and use a **Workflow** when those operations must run in order.
 
----
+Configuration is data, never code. WinSpec reads `.psd1` and `.json`; it never
+loads a `.ps1` spec, imports a third-party module during discovery, searches
+`PATH` for a provider, elevates itself, or turns an arbitrary command string into
+an implicit workflow.
 
-## Motivation
+## Requirements
 
-Managing Windows configuration has traditionally been fragmented across multiple tools, scripts, and manual processes. Users often find themselves:
+- Windows PowerShell 5.1 or PowerShell 7.
+- Windows for live Registry, Service, Feature, checkpoint, and rollback work.
+- Whatever privileges the selected operation itself requires. Start the shell
+  with those privileges when appropriate; WinSpec does not request elevation.
 
-- **Juggling multiple tools**: PowerShell scripts, registry editors, package managers, and various utilities scattered across different contexts
-- **Lacking reproducibility**: Manual configuration changes are hard to track, reproduce, or share across machines
-- **No clear separation of concerns**: Mixing idempotent state management with one-time actions leads to unpredictable results
-- **External dependencies**: Configuration tools often require YAML parsers, JSON schemas, or other non-native dependencies
-
-**WinSpec** solves these problems by providing:
-
-- **Unified architecture**: All Windows configuration in one cohesive system
-- **PowerShell-native configuration**: No YAML, no JSON - just native PowerShell hashtables
-- **Clear provider taxonomy**: Declarative (idempotent) vs Trigger (one-time) actions are explicitly separated
-- **Composable specifications**: Import and merge configurations for modular, reusable setups
-- **Zero external dependencies**: Pure PowerShell implementation works out of the box
-
----
-
-## Introduction
-
-**WinSpec** (Windows Specification) is a unified, composable architecture for managing Windows system configuration. Configuration is expressed in native PowerShell data structures, enabling full PowerShell ecosystem integration.
-
-### WinSpec in Daily Use
-
-WinSpec simplifies your Windows workflow with Git-like commands:
-
-| Daily Task | WinSpec Solution |
-|------------|------------------|
-| **Set up a new PC** | Capture your configured system with `pull`, push to new machines |
-| **Keep config in sync** | Use `pull` to capture system state, then `push` to apply |
-| **Apply your setup** | Run `push` to apply your declarative config (safe, idempotent) |
-| **Check differences** | Use `diff` to see what's changed between system and your config |
-| **Backup before changes** | Use `-Checkpoint` to create restore points before applying |
-| **Rollback if needed** | Use `rollback` to restore to a previous checkpoint |
-
-### Design Principles
-
-| Principle | Description |
-|-----------|-------------|
-| **Native** | Configuration in PowerShell (`.ps1`), not YAML or JSON |
-| **Grouped** | Directories only when necessary for organization |
-| **Composable** | Import and merge specifications for modularity |
-| **Idempotent** | Declarative state management - safe to run multiple times |
-| **Triggerable** | One-time actions via explicit triggers |
-
-### Provider Types
-
-WinSpec distinguishes between two types of providers:
-
-| Type | Location | Characteristics | Idempotent | Examples |
-|------|----------|-----------------|------------|----------|
-| **Declarative** | `managers/` | State-based, testable | Yes | Registry, Service, Feature |
-| **Trigger** | `triggers/` | Action-based, fire-and-forget | No | Activation, Debloat, Office |
-
-**Declarative providers** let you specify *what state* you want. Running multiple times produces the same result - the engine tests current state, calculates diff, and applies only needed changes.
-
-**Trigger providers** let you specify *what to trigger*. These are explicitly named because they are NOT idempotent - users understand that triggering activation twice may have different effects than triggering once.
-
----
-
-## Installation
-
-### Prerequisites
-
-- Windows 10/11
-- PowerShell 5.1 or PowerShell 7+
-- Administrator privileges only for privileged providers/operations (for example Windows Features, service mutation, checkpoints, and remote execution triggers). Registry HKCU capture/apply can run unelevated.
-
-### Install via Scoop (Recommended)
+The source checkout can be invoked directly:
 
 ```powershell
-# Add the bucket
-scoop bucket add winspec https://github.com/nostalume/winspec
-
-# Install WinSpec (current release: v0.5.2)
-scoop install winspec
-
-# Verify installation
-winspec help
+.\winspec\winspec.ps1 help
 ```
 
-To update WinSpec:
+If installed through Scoop, use `winspec` in the examples instead.
+
+## PSD1 or JSON?
+
+Use PSD1 for a hand-maintained spec: it supports comments and PowerShell's
+compact hashtable syntax while `Import-PowerShellDataFile` keeps it data-only.
+Use JSON for generated files or another tool's interchange format. Both formats
+have the same schema and effect model. Neither may contain executable code.
+
+With no explicit path, WinSpec reads
+`%USERPROFILE%\.config\winspec\.winspec.psd1`, falling back to
+`.winspec.json`. If both exist, selection is ambiguous and fails. WinSpec does
+not search parent directories.
+
+## Five-minute example
+
+Create `demo\scripts\hello.ps1`:
 
 ```powershell
-scoop update winspec
+param([string]$Name)
+"Hello, $Name"
 ```
 
-### Install from Source
-
-1. Clone the repository:
-   ```powershell
-   git clone https://github.com/nostalume/winspec.git
-   cd winspec
-   ```
-
-2. (Optional) Run tests to verify installation:
-   ```powershell
-   Invoke-Pester -Path ./tests
-   ```
-
-3. Start using WinSpec:
-   ```powershell
-   .\winspec\winspec.ps1 help
-   ```
-
----
-
-## Usage
-
-### Quick Start
-
-**Step 1: Pull system state to config**
-
-Capture your current system setup (or start fresh):
+Create `demo\machine.winspec.psd1` beside the `scripts` directory:
 
 ```powershell
-# Pull current system state to default location (~/.config/winspec/.winspec.ps1)
-.\winspec\winspec.ps1 pull
-
-# Pull to a specific file
-.\winspec\winspec.ps1 pull -Output my-config.ps1
-
-# Pull to a config directory; writes .winspec.ps1 inside it
-.\winspec\winspec.ps1 pull -Output $HOME/.config/winspec
-
-# If the output spec already exists, merge captured state explicitly
-.\winspec\winspec.ps1 pull -Output $HOME/.config/winspec -Apply
-```
-
-**Step 2: Push configuration to system**
-
-```powershell
-# Push a specification to system (declarative only, safe)
-.\winspec\winspec.ps1 push -Spec .\myconfig.ps1
-
-# Dry run (preview changes without applying)
-.\winspec\winspec.ps1 push -Spec .\myconfig.ps1 -DryRun
-
-# Push with checkpoint (create restore point first)
-.\winspec\winspec.ps1 push -Spec .\myconfig.ps1 -Checkpoint
-
-# Show current system state
-.\winspec\winspec.ps1 status
-```
-
-**Step 3: Daily maintenance**
-
-```powershell
-# See what's different between system and your config
-.\winspec\winspec.ps1 diff -Spec .\myconfig.ps1
-
-# Pull updated system state (capture new changes)
-.\winspec\winspec.ps1 pull -Output my-updated-config.ps1
-
-# If something goes wrong, rollback
-.\winspec\winspec.ps1 rollback -Last
-```
-
-### CLI Commands
-
- | Command | Description |
- |---------|-------------|
- | **pull** | Pull system state to config file (Git-like, primary) |
- | **push** | Push config to system (Git-like, primary) |
- | **diff** | Compare system state with a spec |
- | **merge** | Merge two specification files |
- | **status** | Show current system state |
- | `trigger` | Execute a specific trigger |
- | `rollback` | Rollback to a checkpoint |
- | `providers` | List available providers |
- | `validate` | Validate a spec without applying |
- | `sandbox` | Test changes in a sandbox environment |
- | `help` | Show help message |
-
-### Specification Format
-
-```powershell
-# myconfig.ps1
 @{
-    Name = "myconfig"
-    Description = "My Windows configuration"
-    
-    # Import other specs (composition)
-    Import = @(
-        ".\base-config.ps1"
-    )
-    
-    # === DECLARATIVE PROVIDERS (Idempotent) ===
-    
-    # Registry: fine-grained state management
+    SchemaVersion = 1
+    Name = 'Example workstation'
+
     Registry = @{
-        Clipboard = @{
-            EnableHistory = $true
-        }
         Explorer = @{
             ShowHidden = $true
             ShowFileExt = $true
         }
-        Theme = @{
-            AppTheme = "dark"
-            SystemTheme = "dark"
+    }
+
+    Actions = @{
+        hello = @{
+            Use = 'Script'
+            With = @{
+                File = './scripts/hello.ps1'
+                Args = @('from-spec')
+            }
         }
-        Desktop = @{
-            MenuShowDelay = "0"
-        }
     }
-    
-    # Windows Services
-    Service = @{
-        wuauserv = @{ State = "stopped"; Startup = "disabled" }
-    }
-    
-    # Windows Features
-    Feature = @{
-        "Microsoft-Windows-Subsystem-Linux" = "enabled"
-        "VirtualMachinePlatform" = "enabled"
-    }
-    
-    # === TRIGGERS (Non-Idempotent) ===
-    
-    # Explicit trigger names plus typed parameters in TriggerConfig
-    Trigger = @("Activation", "Debloat", "Office")
-    TriggerConfig = @{
-        Activation = @{ Method = "HWID" }
-        Debloat    = @{ Silent = $true; RemoveCopilot = $true }
-        Office     = @{ Path = "C:\Installers"; Cache = $true }
-    }
-}
-```
 
-### Skipping Providers
-
-WinSpec is modular - you can use only the providers you need. Simply omit the providers you don't want to configure:
-
-```powershell
-# Only configure Registry - other providers will be ignored
-@{
-    Name = "registry-only"
-    Registry = @{
-        Explorer = @{
-            ShowHidden = $true
+    Workflows = @{
+        setup = @{
+            Steps = @(
+                @{ Apply = @{ Providers = @('Registry') } }
+                @{ Run = 'hello' }
+            )
         }
     }
 }
 ```
 
-```powershell
-# Only use Triggers - no declarative providers
-@{
-    Name = "triggers-only"
-    Trigger = @("Activation")
-    TriggerConfig = @{
-        Activation = @{ Method = "HWID" }
-    }
-}
-```
-
-**When pulling with specific providers:**
-```powershell
-# Pull only Registry and Feature state (ignore Service)
-winspec pull -Providers Registry,Feature -Output my-config.ps1
-
-# Non-admin Feature export is skipped with a warning instead of being reported as captured
-```
-
-### Examples
-
-**Daily Workflows:**
+Use the safety ladder before changing the machine:
 
 ```powershell
-# === New Machine Setup ===
-# 1. On your configured machine: pull current system state
-.\winspec\winspec.ps1 pull -Output my-setup.ps1
-
-# 2. On new machine: push the configuration
-.\winspec\winspec.ps1 push -Spec .\my-setup.ps1
-
-# === Regular Maintenance ===
-# Check if system matches your config
-.\winspec\winspec.ps1 diff -Spec .\myconfig.ps1
-
-# Pull updated system state (capture new changes)
-.\winspec\winspec.ps1 pull -Output my-updated-config.ps1
-
-# === Applying Changes ===
-# Push with checkpoint (safe - creates restore point first)
-.\winspec\winspec.ps1 push -Spec .\myconfig.ps1 -Checkpoint
-
-# Dry run - see what would change
-.\winspec\winspec.ps1 push -Spec .\myconfig.ps1 -DryRun
-
-# If something goes wrong
-.\winspec\winspec.ps1 rollback -Last
-
-# === Other Commands ===
-# Run triggers listed in a spec
-.\winspec\winspec.ps1 trigger -Spec .\myconfig.ps1
-
-# Run selected triggers from a spec
-.\winspec\winspec.ps1 trigger -Spec .\myconfig.ps1 -Triggers Activation,Debloat
-
-# Merge two config files
-.\winspec\winspec.ps1 merge -Base base.ps1 -Incoming custom.ps1 -Output merged.ps1
-
-# Validate a spec without applying
-.\winspec\winspec.ps1 validate -Spec .\myconfig.ps1
-
-# List available providers
-.\winspec\winspec.ps1 providers
+$spec = '.\demo\machine.winspec.psd1'
+.\winspec\winspec.ps1 validate $spec
+.\winspec\winspec.ps1 status $spec -Providers Registry
+.\winspec\winspec.ps1 diff $spec -Providers Registry
+.\winspec\winspec.ps1 apply $spec -Providers Registry -DryRun
+.\winspec\winspec.ps1 apply $spec -Providers Registry
+.\winspec\winspec.ps1 run hello -Spec $spec -- from-cli
+.\winspec\winspec.ps1 workflow setup -Spec $spec -DryRun
 ```
 
----
+`validate` admits the complete data shape. `status` observes selected State.
+`diff` exits 1 when desired and observed State differ. `apply -DryRun` computes a
+plan without changing State; `apply` converges State but never runs Actions.
+`run` executes exactly one Action. `workflow` is the only surface that sequences
+State and Actions. In the example, `from-cli` is appended after `from-spec`.
 
-## Security Notes
+## Capture and checkpoints
 
-Trigger providers download and execute remote scripts:
+Capture publishes observed State as another data-only spec:
 
-- **Activation**: Downloads from `https://get.activated.win`
-- **Debloat**: Downloads from `https://debloat.raphi.re/`
-- **Office**: Downloads from Microsoft CDN
+```powershell
+.\winspec\winspec.ps1 capture .\observed.winspec.psd1 -Providers Registry
+```
 
-These scripts require administrator privileges. Trigger modules use PowerShell `ShouldProcess`; always run trigger changes with `-DryRun`/`-WhatIf` first and review remote sources before live execution.
+Existing output requires `-Force`. Publication uses a temporary sibling and an
+atomic replacement. To request one Windows restore point immediately before a
+changing `apply`, add `-Checkpoint`. A Workflow may set `Checkpoint = $true` to
+create one checkpoint before its first effect. System Restore must already be
+available and the caller must already be privileged.
 
----
+## Actions and providers
 
-## Current Release State
+Registry, Service, Feature, and Script are trusted core providers. `Script` is
+the normal extension point: point it at one local `.ps1`, pass an argument array,
+and choose captured or interactive execution explicitly.
 
-- Current release tag: `v0.5.2`.
-- Repository: <https://github.com/nostalume/winspec>.
-- Release tags drive the GitHub Release and Scoop manifest update workflow.
-- Core tests are Pester-based: `Invoke-Pester -Path ./tests`.
+MicrosoftActivation, WindowsDebloat, and OfficeDeployment are bundled external
+Action packages. They are automatically discoverable but inert until an Action
+selects them. Each runs in a separate provider process. Activation and Debloat
+download their official current bootstrap script at run time; WinSpec does not
+pin an upstream release or expected digest. The receipt records the bytes that
+arrived, but that is audit identity after download—not pre-execution
+verification. Those bootstraps can fetch additional content outside WinSpec's
+byte-level receipt. Review the
+[bundled-provider guide](docs/bundled-providers.md) before use.
 
-Recent behavior notes:
+An external provider package is for advanced integrations that need their own
+validation, lifecycle, or child interaction. Ordinary custom scripts do not need
+a manifest or JSON envelope. The dedicated [provider author guide](docs/provider-development.md)
+defines the manifest, operations, process API, and complete Action and State
+examples.
 
-- `pull -Output <directory>` writes `<directory>/.winspec.ps1`.
-- Pull exits before provider capture when the output spec exists and `-Apply` is not supplied.
-- Providers that return empty state are not listed as captured.
-- Non-admin Feature export is skipped with a warning; Feature mutation still requires Administrator privileges.
-- `push -DryRun` uses sandbox mode and cleans up the sandbox context after execution.
-- `push -Checkpoint` aborts before mutation if checkpoint creation fails.
+## Interaction, output, and trust
 
----
+Noninteractive scripts and providers have bounded stdout/stderr, a timeout, and
+an exact immediate-child exit in the result. Interactive local Script Actions
+inherit the terminal, cannot use `-Json` or `-DryRun`, and remain responsible for
+their own prompts or visible child processes. A provider entrypoint is always a
+noninteractive protocol process, but it may launch and wait for a visible child.
 
-## License
+`-Json` reserves stdout for exactly one result document, suitable for automation:
 
-See [LICENSE-MIT](LICENSE-MIT) for details.
+```powershell
+$result = .\winspec\winspec.ps1 providers -Json | ConvertFrom-Json
+$result.results.providers.name
+```
 
----
+External providers and downloaded scripts are trusted programs with the caller's
+OS token. Process isolation protects the WinSpec process and wire contract; it is
+not a security sandbox. No provider runs merely because it was discovered.
+
+An explicitly selected HTTPS Script may fetch current unpinned content. Add an
+optional SHA-256 when exact reviewed bytes must be enforced; plain HTTP requires
+that pin. Results distinguish pinned verification from an observed digest.
 
 ## Documentation
 
-- **[docs/architecture.md](docs/architecture.md)** - Abstractions, concepts, and provider architecture
-- **[docs/api.md](docs/api.md)** - User-facing CLI, specification, and provider-extension API
-- **[docs/development.md](docs/development.md)** - Contributing, testing, CI, and release workflow
-- **[docs/AGENT.md](docs/AGENT.md)** - Toolchain, stack, and operating principles for coding agents
-- **[docs/reference.md](docs/reference.md)** - Ephemeral file layout, spec fields, provider schemas, and contracts
+- [Usage guide](docs/usage.md): capture/apply recipes, scripts, workflows,
+  bundled Actions, results, and troubleshooting.
+- [API reference](docs/api.md): the normative CLI, user schema, limits, and exits.
+- [Built-in State providers](docs/state-providers.md): Registry, Service, and
+  Feature configuration and behavior.
+- [Bundled Action providers](docs/bundled-providers.md): shipped integrations,
+  trust boundaries, effects, and receipts.
+- [Provider author guide](docs/provider-development.md): discovery, manifests, operations,
+  process protocol, complete examples, and extension tests.
+- [Architecture](docs/architecture.md): ownership, effect flow, trust,
+  lifecycle, failure, and cleanup.
+- [Development](docs/development.md): supported hosts, repository tests,
+  fake-effect rules, and completion checks.
+- [Migration](docs/migration.md): removed commands and an end-to-end conversion
+  from legacy Trigger configuration.
 
----
+Runnable examples are under [`examples`](examples). Tests never contact the
+real activation, debloat, or Office endpoints and never perform live machine,
+package, restore-point, elevation, or licensing effects.
 
-*WinSpec - Windows Configuration Made Simple*
+License: MIT.
