@@ -38,7 +38,7 @@ jobs:
       - name: Update Scoop manifest
         run: |
           TAG=${{ steps.get_version.outputs.VER }}
-          
+
           # Update winspec.json using jq
           jq --arg version "$TAG" \
              --arg url "https://github.com/nostalume/winspec/archive/refs/tags/v$TAG.zip" \
@@ -52,7 +52,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add winspec.json
           git commit -m "chore: update scoop manifest for ${{ steps.get_version.outputs.TAG }}" || echo "No changes to commit"
-          
+
       - name: Push changes
         run: |
           # Push to main branch with full refname

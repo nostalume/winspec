@@ -12,15 +12,26 @@ on:
 jobs:
   test:
     runs-on: windows-latest
-    
+    strategy:
+      fail-fast: false
+      matrix:
+        shell: [powershell, pwsh]
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
+
     steps:
     - name: Checkout code
       uses: actions/checkout@v7
-        
+
     - name: Install Pester
       run: |
-        Install-Module -Name Pester -Force -Scope CurrentUser -MinimumVersion 5.0
-        
+        Install-Module -Name Pester -Force -Scope CurrentUser -RequiredVersion 5.7.1
+        Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser -RequiredVersion 1.24.0
+
+    - name: Check formatting
+      run: ./tools/format.ps1 -Check
+
     - name: Run integration tests
       run: |
         $config = New-PesterConfiguration
@@ -30,20 +41,20 @@ jobs:
         $config.TestResult.Enabled = $true
         $config.TestResult.OutputPath = "./test-results.xml"
         $config.TestResult.OutputFormat = "NUnitXml"
-        
+
         Invoke-Pester -Configuration $config
-        
+
     - name: Upload test results
       uses: actions/upload-artifact@v7
       if: always()
       with:
-        name: test-results
+        name: test-results-${{ matrix.shell }}
         path: ./test-results.xml
-        
+
     - name: Publish test results
       uses: dorny/test-reporter@v3
       if: always()
       with:
-        name: Test Results
+        name: Test Results (${{ matrix.shell }})
         path: ./test-results.xml
         reporter: java-junit
