@@ -1,9 +1,8 @@
 # providers/registry.psm1 - Declarative registry provider
 
 # Import dependent modules
-Import-Module (Join-Path $PSScriptRoot "..\logging.psm1")
 Import-Module (Join-Path $PSScriptRoot "..\schema.psm1")
-Import-Module (Join-Path $PSScriptRoot "..\registry-maps.psm1")
+Import-Module (Join-Path $PSScriptRoot "registry-maps.psm1")
 Import-Module (Join-Path $PSScriptRoot "..\sandbox.psm1") -ErrorAction SilentlyContinue
 
 function Get-ProviderInfo {
@@ -77,7 +76,6 @@ function Test-RegistryState {
 
     foreach ($category in $Desired.Keys) {
         if (-not $registryMap.ContainsKey($category)) {
-            Write-Log -Level "WARN" -Message "Unknown registry category: $category"
             $allInDesiredState = $false
             continue
         }
@@ -85,7 +83,6 @@ function Test-RegistryState {
         $catConfig = $registryMap[$category]
         foreach ($propName in $Desired[$category].Keys) {
             if (-not $catConfig.Properties.ContainsKey($propName)) {
-                Write-Log -Level "WARN" -Message "Unknown property: $propName in $category"
                 $allInDesiredState = $false
                 continue
             }
@@ -93,7 +90,6 @@ function Test-RegistryState {
             $propConfig = $catConfig.Properties[$propName]
             $desiredValue = $Desired[$category][$propName]
             if ($propConfig.Map -and -not $propConfig.Map.ContainsKey($desiredValue)) {
-                Write-Log -Level "WARN" -Message "Invalid value for $category.$($propName): $desiredValue"
                 $allInDesiredState = $false
                 continue
             }
@@ -126,18 +122,14 @@ function Set-RegistryState {
         $catConfig = $registryMap[$category]
 
         if (-not $catConfig) {
-            Write-Log -Level "WARN" -Message "Unknown registry category: $category"
             $results[$category] = @{ Status = "Error"; Message = "Unknown category" }
             continue
         }
-
-        Write-Log -Level "INFO" -Message "Processing category: $category"
 
         foreach ($propName in $Desired[$category].Keys) {
             $propConfig = $catConfig.Properties[$propName]
 
             if (-not $propConfig) {
-                Write-Log -Level "WARN" -Message "Unknown property: $propName in $category"
                 $categoryResults[$propName] = @{ Status = "Error"; Message = "Unknown property" }
                 continue
             }
@@ -147,7 +139,6 @@ function Set-RegistryState {
 
             if ($propConfig.Map) {
                 if (-not $propConfig.Map.ContainsKey($desiredValue)) {
-                    Write-Log -Level "WARN" -Message "Invalid value for $category.$($propName): $desiredValue"
                     $categoryResults[$propName] = @{ Status = "Error"; Message = "Invalid value" }
                     continue
                 }
@@ -160,22 +151,16 @@ function Set-RegistryState {
             }
 
             if ($currentState -eq $desiredValue) {
-                Write-LogOk -Name "$category.$propName" -DesiredValue $desiredValue
                 $categoryResults[$propName] = @{ Status = "AlreadySet"; Value = $desiredValue }
                 continue
             }
 
-            $currentStateStr = if ($null -eq $currentState) { "(null)" } else { [string]$currentState }
-            Write-LogChange -Name "$category.$propName" -CurrentValue $currentStateStr -DesiredValue $desiredValue
-
             if ($PSCmdlet.ShouldProcess("$($catConfig.Path)\$($propConfig.Name)", "Set to '$desiredValue'")) {
                 try {
                     Set-RegistryValue -Path $catConfig.Path -Property $propConfig.Name -Type $propConfig.Type -Value $valueToSet
-                    Write-LogApplied -Name "$category.$propName" -DesiredValue $desiredValue
                     $categoryResults[$propName] = @{ Status = "Applied"; Value = $desiredValue }
                 }
                 catch {
-                    Write-LogError -Name "$category.$propName" -Details $_.Exception.Message
                     $categoryResults[$propName] = @{ Status = "Error"; Message = $_.Exception.Message }
                 }
             }
@@ -267,8 +252,8 @@ function Compare-RegistryState {
             $path = "Registry.$categoryName.$propName"
 
             $differences.Add([PSCustomObject]@{
-                    Type        = $type
-                    Path        = $path
+                    Type = $type
+                    Path = $path
                     SystemValue = $systemValue
                     ConfigValue = $desiredValue
                 })
@@ -306,7 +291,7 @@ function Invoke-RegistrySandbox {
     $providerName = "Registry"
 
     $results = @{
-        Status  = "Success"
+        Status = "Success"
         Changed = @()
     }
 
@@ -332,7 +317,7 @@ function Invoke-RegistrySandbox {
 
                     $results.Changed += @{
                         Category = $category
-                        Key      = $key
+                        Key = $key
                         OldValue = $oldValue
                         NewValue = $newValue
                     }

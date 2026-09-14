@@ -1,469 +1,179 @@
-# State Management Integration Tests
-# Tests for state comparison, diff, and merge functionality
-
 BeforeAll {
-    $winspecRoot = Join-Path $PSScriptRoot ".." "winspec"
-    
-    Import-Module (Join-Path $winspecRoot "logging.psm1") -Force -Global
-    Import-Module (Join-Path $winspecRoot "utils.psm1")    -Force -Global
-    Import-Module (Join-Path $winspecRoot "schema.psm1")   -Force -Global
-    Import-Module (Join-Path $winspecRoot "state.psm1")    -Force -Global
-    Import-Module (Join-Path $winspecRoot "diff.psm1")     -Force -Global
-    Import-Module (Join-Path $winspecRoot "merge.psm1")    -Force -Global
+    $script:Root = Join-Path (Resolve-Path (Join-Path $PSScriptRoot '..')) 'winspec'
+    Import-Module (Join-Path $script:Root 'state.psm1') -Force
+    Import-Module (Join-Path $script:Root 'merge.psm1') -Force
+    Import-Module (Join-Path $script:Root 'schema.psm1') -Force
+    Import-Module (Join-Path $script:Root 'provider-runtime.psm1') -Force
 }
 
-Describe "State Comparison" {
-    Context "Compare-SystemState" {
-        It "Should return flat diff hashtable with Added/Removed/Changed/Equal keys" {
-            InModuleScope state {
-                Mock Get-Managers { return @([PSCustomObject]@{ Name = "Registry"; Type = "Declarative"; Path = "registry.psm1" }) }
-                Mock Compare-ProviderState { return @() }
-                
-                $spec = @{
-                    Registry = @{ Explorer = @{ ShowHidden = $true } }
-                }
-                
-                $result = Compare-SystemState -Spec $spec -Against @{}
-                $result | Should -Not -BeNullOrEmpty
-                $result -is [hashtable] | Should -BeTrue
-                $result.ContainsKey("Added")   | Should -BeTrue
-                $result.ContainsKey("Changed") | Should -BeTrue
-                $result.ContainsKey("Removed") | Should -BeTrue
-            }
-        }
-        
-        It "Should handle empty spec" {
-            InModuleScope state {
-                Mock Get-Managers { return @() }
-                
-                $result = Compare-SystemState -Spec @{} -Against @{}
-                $result | Should -Not -BeNullOrEmpty
-            }
-        }
-        
-        It "Should handle spec with multiple provider keys" {
-            InModuleScope state {
-                Mock Get-Managers {
-                    return @(
-                        [PSCustomObject]@{ Name = "Registry"; Type = "Declarative"; Path = "registry.psm1" },
-                        [PSCustomObject]@{ Name = "Feature"; Type = "Declarative"; Path = "feature.psm1" }
-                    )
-                }
-                Mock Compare-ProviderState { return @() }
-                
-                $spec = @{
-                    Registry = @{ Explorer = @{ ShowHidden = $true } }
-                    Feature  = @{ TelnetClient = "enabled" }
-                }
-                
-                $result = Compare-SystemState -Spec $spec -Against @{}
-                $result | Should -Not -BeNullOrEmpty
-            }
+Describe 'built-in state authority' {
+    It 'uses only the three explicit built-in state managers' {
+        @(Get-Managers).Name | Should -Be @('Registry', 'Service', 'Feature')
+    }
+
+    It 'rejects an unknown selected provider' {
+        { Resolve-ProviderList (Get-Managers) @('missing') } | Should -Throw '*UnknownProvider*'
+    }
+
+    It 'uses core-only defaults and spec-derived defaults without ambiguity' {
+        $catalog = @(
+            [pscustomobject]@{Name = 'Registry'; Kind = 'State'; Execution = 'Core' }
+            [pscustomobject]@{Name = 'Acme'; Kind = 'State'; Execution = 'Protocol' }
+        )
+
+        @(Resolve-WinSpecStateProviders $catalog).Name |
+            Should -Be @('Registry')
+        @(Resolve-WinSpecStateProviders -Catalog $catalog `
+                -Spec @{Acme = @{} } -SpecScoped).Name |
+            Should -Be @('Acme')
+        @(Resolve-WinSpecStateProviders -Catalog $catalog `
+                -Providers @('Acme')).Name |
+            Should -Be @('Acme')
+    }
+}
+
+Describe 'schema and merge truth' {
+    It 'accepts the versioned core schema and rejects removed trigger fields' {
+        $catalog = Get-ProviderCatalog
+        (Test-WinSpecSchema @{SchemaVersion = 1; Actions = @{} } $catalog).Valid | Should -BeTrue
+        (Test-WinSpecSchema @{SchemaVersion = 1; Trigger = @('old') } $catalog).Valid | Should -BeFalse
+    }
+
+    It 'propagates a nested auto conflict and does not claim success' {
+        $result = Invoke-MergeEngine -Base @{A = @{B = 1 } } -Incoming @{A = @{B = 2 } } -Strategy auto
+        $result.Success | Should -BeFalse
+        $result.Conflicts.Count | Should -Be 1
+        $result.Conflicts[0].Path | Should -Be 'A.B'
+    }
+
+    It 'replaces conflicting values under theirs' {
+        $result = Invoke-MergeEngine -Base @{A = @{B = 1 } } -Incoming @{A = @{B = 2 } } -Strategy theirs
+        $result.Success | Should -BeTrue
+        $result.Merged.A.B | Should -Be 2
+    }
+}
+
+Describe 'built-in state admission' {
+    BeforeAll {
+        $script:Catalog = Get-ProviderCatalog
+    }
+
+    It 'rejects invalid mapped and primitive Registry values' -ForEach @(
+        @{ Value = 'diagonal'; Path = 'Taskbar'; Property = 'Alignment' }
+        @{ Value = 12; Path = 'Desktop'; Property = 'MenuShowDelay' }
+        @{ Value = -1; Path = 'Desktop'; Property = 'ForegroundLockTimeout' }
+        @{ Value = 4294967296; Path = 'Desktop'; Property = 'ForegroundLockTimeout' }
+    ) {
+        $spec = @{ SchemaVersion = 1; Registry = @{} }
+        $spec.Registry[$Path] = @{$Property = $Value }
+
+        (Test-WinSpecSchema $spec $script:Catalog).Valid | Should -BeFalse
+    }
+
+    It 'rejects services outside the safety allow-list' {
+        $spec = @{
+            SchemaVersion = 1
+            Service = @{ EventLog = @{ State = 'running' } }
         }
 
-        It "Should pass provider objects to provider comparison" {
-            InModuleScope state {
-                Mock Get-Managers {
-                    return @(
-                        [PSCustomObject]@{ Name = "Registry"; Type = "Declarative"; Path = "registry.psm1" }
-                    )
-                }
-                Mock Compare-ProviderState {
-                    $script:seenProvider = $Provider
-                    return @()
-                }
+        $result = Test-WinSpecSchema $spec $script:Catalog
 
-                $result = Compare-SystemState `
-                    -Spec @{ Registry = @{ Explorer = @{ ShowHidden = $true } } } `
-                    -Against @{ Registry = @{ Explorer = @{ ShowHidden = $false } } }
+        $result.Valid | Should -BeFalse
+        $result.Errors | Should -Match 'ServiceNotManaged'
+    }
 
-                $result | Should -Not -BeNullOrEmpty
-                $script:seenProvider.Name | Should -Be "Registry"
-                $script:seenProvider.Path | Should -Be "registry.psm1"
+    It 'accepts case-insensitive built-in State values and DWord bounds' {
+        $spec = @{
+            SchemaVersion = 1
+            Registry = @{ Desktop = @{ ForegroundLockTimeout = 4294967295 } }
+            Service = @{ WUAUSERV = @{ State = 'RUNNING'; Startup = 'MANUAL' } }
+            Feature = @{ TelnetClient = 'DISABLED' }
+        }
+
+        (Test-WinSpecSchema $spec $script:Catalog).Valid | Should -BeTrue
+    }
+
+    It 'keeps the documented Registry inventory anchored to metadata' {
+        InModuleScope schema {
+            $count = 0
+            foreach ($category in (Get-RegistryMaps).Values) {
+                $count += $category.Properties.Count
             }
+
+            $count | Should -Be 15
         }
     }
 }
 
-Describe "Diff Output" {
-    Context "Format-DiffOutput" {
-        It "Should format added items" {
-            InModuleScope diff {
-                $diff = @{
-                    Added = @(
-                        @{ Path = "Registry.Explorer.ShowHidden"; ConfigValue = $true; SystemValue = $null }
-                    )
-                    Changed = @()
-                    Removed = @()
-                    Equal   = @()
-                }
-                
-                $output = Format-DiffOutput -Differences $diff
-                $output | Should -Not -BeNullOrEmpty
-                $output | Should -Match "ADDED"
-                $output | Should -Match "ShowHidden"
-            }
-        }
-        
-        It "Should format changed items" {
-            InModuleScope diff {
-                $diff = @{
-                    Added   = @()
-                    Changed = @(
-                        @{ Path = "Registry.Explorer.ShowHidden"; SystemValue = $false; ConfigValue = $true }
-                    )
-                    Removed = @()
-                    Equal   = @()
-                }
-                
-                $output = Format-DiffOutput -Differences $diff
-                $output | Should -Not -BeNullOrEmpty
-                $output | Should -Match "CHANGED"
-            }
-        }
-        
-        It "Should format removed items" {
-            InModuleScope diff {
-                $diff = @{
-                    Added   = @()
-                    Changed = @()
-                    Removed = @(
-                        @{ Path = "Registry.Explorer.ShowHidden"; SystemValue = $true; ConfigValue = $null }
-                    )
-                    Equal   = @()
-                }
-                
-                $output = Format-DiffOutput -Differences $diff
-                $output | Should -Not -BeNullOrEmpty
-                $output | Should -Match "REMOVED"
-            }
-        }
-        
-        It "Should format mixed changes" {
-            InModuleScope diff {
-                $diff = @{
-                    Added = @(
-                        @{ Path = "Registry.Explorer.NewValue"; ConfigValue = $true; SystemValue = $null }
-                    )
-                    Changed = @(
-                        @{ Path = "Registry.Explorer.OldValue"; SystemValue = $false; ConfigValue = $true }
-                    )
-                    Removed = @(
-                        @{ Path = "Registry.Explorer.RemovedValue"; SystemValue = $true; ConfigValue = $null }
-                    )
-                    Equal = @()
-                }
-                
-                $output = Format-DiffOutput -Differences $diff
-                $output | Should -Not -BeNullOrEmpty
-                $output | Should -Match "ADDED"
-                $output | Should -Match "CHANGED"
-                $output | Should -Match "REMOVED"
-            }
-        }
-    }
-}
-
-Describe "State Merge" {
-    Context "Merge-Configuration" {
-        It "Should merge two config hashtables" {
-            $base = @{
-                Registry = @{ Explorer = @{ ShowHidden = $false } }
-            }
-            $incoming = @{
-                Registry = @{ Explorer = @{ ShowHidden = $true } }
-            }
-            
-            $result = Merge-Configuration -Base $base -Incoming $incoming
-            $result | Should -Not -BeNullOrEmpty
-            $result.Success | Should -BeTrue
-        }
-        
-        It "Should handle empty incoming" {
-            $base = @{
-                Registry = @{ Explorer = @{ ShowHidden = $true } }
-            }
-            
-            $result = Merge-Configuration -Base $base -Incoming @{}
-            $result | Should -Not -BeNullOrEmpty
-            $result.Success | Should -BeTrue
-        }
-    }
-}
-
-Describe "State Export" {
-    Context "Get-SystemState" {
-        It "Should return a hashtable" {
-            InModuleScope state {
-                Mock Get-Managers {
-                    return @(
-                        [PSCustomObject]@{ Name = "Registry"; Type = "Declarative"; Path = "" }
-                    )
-                }
-                Mock Export-ProviderState { return @{ Explorer = @{ ShowHidden = $true } } }
-                
-                $result = Get-SystemState
-                $result | Should -Not -BeNullOrEmpty
-                $result -is [hashtable] | Should -BeTrue
-            }
-        }
-        
-        It "Should accept Providers filter" {
-            InModuleScope state {
-                Mock Get-Managers {
-                    return @(
-                        [PSCustomObject]@{ Name = "Registry"; Type = "Declarative"; Path = "" }
-                    )
-                }
-                Mock Export-ProviderState { return @{ Explorer = @{ ShowHidden = $true } } }
-                
-                $result = Get-SystemState -Providers @("Registry")
-                $result | Should -Not -BeNullOrEmpty
-            }
-        }
-
-        It "Should not reuse state across different provider filters" {
-            InModuleScope state {
-                Mock Get-Managers {
-                    return @(
-                        [PSCustomObject]@{ Name = "Registry"; Type = "Declarative"; Path = "registry.psm1" },
-                        [PSCustomObject]@{ Name = "Feature"; Type = "Declarative"; Path = "feature.psm1" }
-                    )
-                }
-                Mock Export-ProviderState {
-                    if ($Provider.Name -eq "Registry") { return @{ Marker = "registry" } }
-                    if ($Provider.Name -eq "Feature") { return @{ Marker = "feature" } }
-                }
-
-                $first = Get-SystemState -Providers @("Registry")
-                $second = Get-SystemState -Providers @("Feature")
-
-                $first.ContainsKey("Registry") | Should -BeTrue
-                $first.ContainsKey("Feature") | Should -BeFalse
-                $second.ContainsKey("Feature") | Should -BeTrue
-                $second.ContainsKey("Registry") | Should -BeFalse
-            }
-        }
-
-
-        It "Should not report providers that returned empty state as captured" {
-            InModuleScope state {
-                Mock Get-Managers {
-                    return @(
-                        [PSCustomObject]@{ Name = "Registry"; Type = "Declarative"; Path = "registry.psm1" },
-                        [PSCustomObject]@{ Name = "Feature"; Type = "Declarative"; Path = "feature.psm1" }
-                    )
-                }
-                Mock Export-ProviderState {
-                    if ($Provider.Name -eq "Registry") { return @{ Marker = "registry" } }
-                    if ($Provider.Name -eq "Feature") { return @{} }
-                }
-
-                $result = Get-SystemState
-
-                $result.ContainsKey("Registry") | Should -BeTrue
-                $result.ContainsKey("Feature") | Should -BeFalse
-            }
-        }
-    }
-}
-
-Describe "Provider Discovery" {
-    Context "Get-Managers" {
-        It "Should not discover retired Scoop or Winget package managers" {
-            InModuleScope state {
-                $managerNames = @(Get-Managers | ForEach-Object { $_.Name })
-
-                $managerNames | Should -Not -Contain "Scoop"
-                $managerNames | Should -Not -Contain "Winget"
-            }
-        }
-
-        It "Should include Service in the default provider list" {
-            InModuleScope state {
-                $providers = Resolve-ProviderList
-
-                $providers | Should -Contain "Registry"
-                $providers | Should -Contain "Feature"
-                $providers | Should -Contain "Service"
-            }
-        }
-    }
-}
-
-Describe "Utility Surface" {
-    Context "Retired package helpers" {
-        It "Should not export package merge helpers after package managers are retired" {
-            Get-Command Merge-PackageState -ErrorAction SilentlyContinue | Should -BeNullOrEmpty
-            Get-Command Merge-SourceCollection -ErrorAction SilentlyContinue | Should -BeNullOrEmpty
-        }
-    }
-}
-
-
-
-Describe "Retired state cache API" {
-    It "Should not expose cache bypass or cache clearing APIs after cache removal" {
+Describe 'core State result normalization' {
+    It 'fails a partially applied provider and preserves sibling receipts' {
         InModuleScope state {
-            (Get-Command Get-SystemState).Parameters.ContainsKey("NoCache") | Should -BeFalse
-            Get-Command Clear-SystemStateCache -ErrorAction SilentlyContinue | Should -BeNullOrEmpty
+            $catalog = @([pscustomobject]@{
+                    Name = 'Registry'
+                    Kind = 'State'
+                    Execution = 'Core'
+                    Operations = @('capture', 'compare', 'apply')
+                })
+            Mock Get-Managers {
+                @([pscustomobject]@{
+                        Name = 'Registry'
+                        Type = 'State'
+                        Path = 'unused'
+                    })
+            }
+            Mock Invoke-Manager {
+                @{
+                    Desktop = @{
+                        MenuShowDelay = @{ Status = 'Applied'; Value = '0' }
+                        ForegroundLockTimeout = @{
+                            Status = 'Error'
+                            Reason = 'AccessDenied'
+                            Message = 'denied'
+                        }
+                    }
+                }
+            }
+
+            $result = Invoke-WinSpecStateApply `
+                -Spec @{Registry = @{Desktop = @{MenuShowDelay = '0' } } } `
+                -Catalog $catalog
+
+            $result.Status | Should -Be 'Failed'
+            $result.Providers[0].Status | Should -Be 'Failed'
+            $result.Providers[0].Output.Desktop.MenuShowDelay.Status |
+                Should -Be 'Applied'
+            $result.Providers[0].Diagnostics[0].Code | Should -Be 'AccessDenied'
+            $result.Providers[0].Diagnostics[0].Resource |
+                Should -Be 'Registry.Desktop.ForegroundLockTimeout'
         }
     }
-}
 
-
-Describe "WinSpec Execution Results" {
-    It "Should mark execution unsuccessful when a provider reports Error" {
+    It 'translates an unexpected core apply exception at the provider boundary' {
         InModuleScope state {
-            Mock Test-SpecSchema { $true }
-            Mock Invoke-Managers { @{ Registry = @{ Status = "Error"; Reason = "Boom" } } }
-            Mock Invoke-Triggers { @{} }
-            Mock Write-WinSpecResultSummary { }
-            Mock Write-LogHeader { }
-            Mock Write-Log { }
-            Mock Write-LogSection { }
-
-            $result = Invoke-WinSpec -Spec @{ Registry = @{ Explorer = @{ ShowHidden = $true } } }
-
-            $result.Success | Should -BeFalse
-        }
-    }
-
-    It "Should mark execution unsuccessful when a trigger reports Error" {
-        InModuleScope state {
-            Mock Test-SpecSchema { $true }
-            Mock Invoke-Managers { @{} }
-            Mock Invoke-Triggers { @{ debloat = @{ Status = "Error"; Message = "bad" } } }
-            Mock Write-WinSpecResultSummary { }
-            Mock Write-LogHeader { }
-            Mock Write-Log { }
-            Mock Write-LogSection { }
-
-            $result = Invoke-WinSpec -Spec @{ Trigger = @("debloat") }
-
-            $result.Success | Should -BeFalse
-        }
-    }
-
-    It "Should not apply providers when requested checkpoint fails" {
-        InModuleScope state {
-            Mock Test-SpecSchema { $true }
-            Mock New-Checkpoint { @{ Success = $false; Reason = "RequiresAdministrator" } }
-            Mock Invoke-Managers { throw "Invoke-Managers should not run when checkpoint fails" }
-            Mock Invoke-Triggers { throw "Invoke-Triggers should not run when checkpoint fails" }
-            Mock Write-LogHeader { }
-            Mock Write-Log { }
-            Mock Write-LogSection { }
-
-            $result = Invoke-WinSpec -Spec @{ Registry = @{ Explorer = @{ ShowHidden = $true } } } -Checkpoint
-
-            $result.Success | Should -BeFalse
-            $result.Reason | Should -Be "CheckpointFailed"
-            $result.Checkpoint.Reason | Should -Be "RequiresAdministrator"
-        }
-    }
-}
-
-Describe "State Validation" {
-    Context "Test-SpecSchema" {
-        It "Should return true for valid spec with known keys" {
-            $spec = @{
-                Registry = @{
-                    Explorer = @{ ShowHidden = $true }
-                }
+            $catalog = @([pscustomobject]@{
+                    Name = 'Registry'
+                    Kind = 'State'
+                    Execution = 'Core'
+                    Operations = @('capture', 'compare', 'apply')
+                })
+            Mock Get-Managers {
+                @([pscustomobject]@{
+                        Name = 'Registry'
+                        Type = 'State'
+                        Path = 'unused'
+                    })
             }
-            
-            $result = Test-SpecSchema -Spec $spec
-            $result | Should -BeTrue
-        }
-        
-        It "Should return false for spec with unknown top-level key" {
-            $spec = @{
-                UnknownInvalidTopLevelKey = "some value"
-            }
-            
-            $result = Test-SpecSchema -Spec $spec
-            $result | Should -BeFalse
-        }
+            Mock Invoke-Manager { throw 'AccessDenied: simulated failure' }
 
-        It "Should reject retired package-manager sections" {
-            $spec = @{
-                Scoop  = @{ Installed = @("git") }
-                Winget = @{ Installed = @("Git.Git") }
-            }
+            $result = Invoke-WinSpecStateApply `
+                -Spec @{Registry = @{Desktop = @{MenuShowDelay = '0' } } } `
+                -Catalog $catalog
 
-            $result = Test-SpecSchema -Spec $spec
-            $result | Should -BeFalse
-        }
-
-        It "Should reject unknown Registry properties" {
-            $spec = @{
-                Registry = @{
-                    Explorer = @{ DefinitelyNotASetting = $true }
-                }
-            }
-
-            $result = Test-SpecSchema -Spec $spec
-            $result | Should -BeFalse
-        }
-
-        It "Should reject invalid mapped Registry values" {
-            $spec = @{
-                Registry = @{
-                    Theme = @{ AppTheme = "blue" }
-                }
-            }
-
-            $result = Test-SpecSchema -Spec $spec
-            $result | Should -BeFalse
-        }
-
-        It "Should accept expanded Taskbar and Start registry categories" {
-            $spec = @{
-                Registry = @{
-                    Taskbar = @{ Alignment = "left"; ShowTaskViewButton = $false }
-                    Start   = @{ ShowRecommendations = $false; ShowRecentlyAddedApps = $true }
-                }
-            }
-
-            $result = Test-SpecSchema -Spec $spec
-            $result | Should -BeTrue
-        }
-
-        It "Should accept Trigger selection with separate TriggerConfig parameters" {
-            $spec = @{
-                Trigger = @("activation", "debloat")
-                TriggerConfig = @{
-                    activation = @{ Method = "KMS38" }
-                    debloat    = @{ Silent = $true }
-                }
-            }
-
-            $result = Test-SpecSchema -Spec $spec
-            $result | Should -BeTrue
-        }
-
-        It "Should reject mixed trigger parameter maps inside Trigger selection" {
-            $spec = @{
-                Trigger = @{
-                    activation = @{ Method = "KMS38" }
-                }
-            }
-
-            $result = Test-SpecSchema -Spec $spec
-            $result | Should -BeFalse
-        }
-
-        It "Should reject non-hashtable TriggerConfig entries" {
-            $spec = @{
-                Trigger = @("debloat")
-                TriggerConfig = @{
-                    debloat = "silent"
-                }
-            }
-
-            $result = Test-SpecSchema -Spec $spec
-            $result | Should -BeFalse
+            $result.Status | Should -Be 'Failed'
+            $result.Providers[0].Status | Should -Be 'Failed'
+            $result.Providers[0].Diagnostics[0].code | Should -Be 'AccessDenied'
+            $result.Providers[0].Diagnostics[0].resource |
+                Should -Be 'Registry'
         }
     }
 }

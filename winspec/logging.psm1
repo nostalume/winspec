@@ -6,25 +6,25 @@ function Write-Log {
         [Parameter(Mandatory = $true)]
         [ValidateSet("INFO", "OK", "APPLIED", "CHANGE", "ERROR", "WARN")]
         [string]$Level,
-        
+
         [Parameter(Mandatory = $true)]
         [string]$Message
     )
 
     $colors = @{
-        "OK"      = "Green"
+        "OK" = "Green"
         "APPLIED" = "Green"
-        "WARN"    = "Yellow"
-        "ERROR"   = "Red"
+        "WARN" = "Yellow"
+        "ERROR" = "Red"
     }
 
     $prefix = switch ($Level) {
-        "INFO"    { "[INFO]" }
-        "OK"      { "[OK]" }
+        "INFO" { "[INFO]" }
+        "OK" { "[OK]" }
         "APPLIED" { "[APPLIED]" }
-        "CHANGE"  { "[CHANGE]" }
-        "WARN"    { "[WARN]" }
-        "ERROR"   { "[ERROR]" }
+        "CHANGE" { "[CHANGE]" }
+        "WARN" { "[WARN]" }
+        "ERROR" { "[ERROR]" }
     }
 
     if ($colors.ContainsKey($Level)) {
@@ -52,7 +52,7 @@ function Write-LogOk {
     param (
         [Parameter(Mandatory = $true)]
         [string]$Name,
-        
+
         [Parameter(Mandatory = $true)]
         [string]$DesiredValue
     )
@@ -64,7 +64,7 @@ function Write-LogApplied {
     param (
         [Parameter(Mandatory = $true)]
         [string]$Name,
-        
+
         [Parameter(Mandatory = $true)]
         [string]$DesiredValue
     )
@@ -76,10 +76,10 @@ function Write-LogChange {
     param (
         [Parameter(Mandatory = $true)]
         [string]$Name,
-        
+
         [Parameter(Mandatory = $true)]
         [string]$CurrentValue,
-        
+
         [Parameter(Mandatory = $true)]
         [string]$DesiredValue
     )
@@ -91,7 +91,7 @@ function Write-LogError {
     param (
         [Parameter(Mandatory = $true)]
         [string]$Name,
-        
+
         [Parameter(Mandatory = $false)]
         [string]$Details = ""
     )

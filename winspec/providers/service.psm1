@@ -1,37 +1,12 @@
 # providers/service.psm1 - Declarative Windows services provider
 
 # Import dependent modules
-Import-Module (Join-Path $PSScriptRoot "..\logging.psm1")
-Import-Module (Join-Path $PSScriptRoot "..\utils.psm1")
+Import-Module (Join-Path $PSScriptRoot "..\windows.psm1")
 Import-Module (Join-Path $PSScriptRoot "..\sandbox.psm1") -ErrorAction SilentlyContinue
 
-$WindowsConfigurableServices = @(
-    "WinDefend"
-    "WdNisSvc"
-    "SecurityHealthService"
-
-    "DiagTrack"
-    "dmwappushservice"
-
-    "WSearch"
-
-    "wuauserv"
-    "UsoSvc"
-    "BITS"
-
-    "Dnscache"
-    "Dhcp"
-    "NlaSvc"
-
-    "RemoteRegistry"
-    "TermService"
-    "WinRM"
-
-    "SysMain"
-    "WerSvc"
-
-    "Spooler"
-)
+$servicePolicy = Import-PowerShellDataFile `
+(Join-Path $PSScriptRoot 'service-policy.psd1')
+$WindowsConfigurableServices = @($servicePolicy.Services)
 
 function Test-ServiceManaged {
     param([Parameter(Mandatory)][string]$Name)
@@ -59,8 +34,8 @@ function Convert-ServiceObject {
     param($Service)
 
     [pscustomobject]@{
-        Name    = $Service.Name.ToString()
-        State   = $Service.Status.ToString()
+        Name = $Service.Name.ToString()
+        State = $Service.Status.ToString()
         Startup = $Service.StartType.ToString()
     }
 }
@@ -96,10 +71,10 @@ function Get-ServiceState {
     )
 
     $services = Get-Service -ErrorAction SilentlyContinue
-    
+
     Write-Verbose "Services: $($services | Format-Table | Out-String)"
     if ($ServiceNames) {
-        $services = $services | Where-Object Name -in $ServiceNames
+        $services = $services | Where-Object Name -In $ServiceNames
     }
 
     $result = @{}
@@ -124,7 +99,6 @@ function Test-ServiceState {
         $current = $states[$name]
 
         if (-not $current) {
-            Write-Log -Level WARN -Message "Service not found: $name"
             return $false
         }
 
@@ -151,7 +125,6 @@ function Set-ServiceState {
     )
 
     if (-not (Test-IsAdmin)) {
-        Write-Log -Level ERROR -Message "Service changes require Administrator privileges"
         return @{ Status = "Error"; Reason = "RequiresAdministrator"; Message = "Service changes require Administrator privileges" }
     }
 
@@ -161,7 +134,6 @@ function Set-ServiceState {
     foreach ($name in $Desired.Keys) {
 
         if (-not (Test-ServiceManaged -Name $name)) {
-            Write-Log -Level ERROR -Message "Service is not managed by WinSpec safety allow-list: $name"
             $results[$name] = @{ Status = "Error"; Reason = "ServiceNotManaged"; Message = "Service is not managed by WinSpec" }
             continue
         }
@@ -169,7 +141,6 @@ function Set-ServiceState {
         $current = $states[$name]
 
         if (-not $current) {
-            Write-Log -Level ERROR -Message "Service not found: $name"
             $results[$name] = @{ Status = "Error"; Message = "Service not found" }
             continue
         }
@@ -179,18 +150,12 @@ function Set-ServiceState {
 
         # --- Startup ---
         if ($target.Startup -and (ConvertTo-ServiceSpecStartup $current.Startup) -ne (ConvertTo-ServiceSpecStartup $target.Startup)) {
-            Write-LogChange -Name "$name.Startup" `
-                -CurrentValue $current.Startup `
-                -DesiredValue $target.Startup
-
             if ($PSCmdlet.ShouldProcess($name, "Startup -> $($target.Startup)")) {
                 try {
                     Set-Service -Name $name -StartupType $target.Startup -ErrorAction Stop
-                    Write-LogApplied -Name "$name.Startup" -DesiredValue $target.Startup
                     $result.Startup = @{ Status = "Applied" }
                 }
                 catch {
-                    Write-LogError -Name "$name.Startup" -Details $_.Exception.Message
                     $result.Startup = @{ Status = "Error"; Message = $_.Exception.Message }
                 }
             }
@@ -206,10 +171,6 @@ function Set-ServiceState {
                 continue
             }
 
-            Write-LogChange -Name "$name.State" `
-                -CurrentValue $current.State `
-                -DesiredValue $target.State
-
             if (-not $PSCmdlet.ShouldProcess($name, "State -> $($target.State)")) {
                 $results[$name] = $result
                 continue
@@ -224,12 +185,10 @@ function Set-ServiceState {
                     Stop-Service $name -Force -ErrorAction Stop
                 }
 
-                Write-LogApplied -Name "$name.State" -DesiredValue $target.State
                 $result.State = @{ Status = "Applied" }
 
             }
             catch {
-                Write-LogError -Name "$name.State" -Details $_.Exception.Message
                 $result.State = @{ Status = "Error"; Message = $_.Exception.Message }
             }
         }
@@ -247,9 +206,9 @@ function Export-ServiceState {
     )
 
     $ServiceNames = Resolve-ManagedServiceNames -ServiceNames $ServiceNames
-    
+
     Write-Verbose "Exporting service state for: $($ServiceNames -join ', ')"
-    
+
     $states = Get-ServiceState -ServiceNames $ServiceNames
     $result = @{}
 
@@ -257,7 +216,7 @@ function Export-ServiceState {
         $svc = $states[$name]
 
         $result[$name] = @{
-            State   = $svc.State
+            State = $svc.State
             Startup = $svc.Startup
         }
     }
@@ -284,11 +243,11 @@ function Compare-ServiceState {
 
         if (-not $systemConfig) {
             [void]$diffs.Add([pscustomobject]@{
-                Type        = "Added"
-                Path        = $path
-                SystemValue = $null
-                ConfigValue = $desiredConfig
-            })
+                    Type = "Added"
+                    Path = $path
+                    SystemValue = $null
+                    ConfigValue = $desiredConfig
+                })
 
             continue
         }
@@ -298,31 +257,31 @@ function Compare-ServiceState {
 
         if ($stateEqual -and $startupEqual) {
             [void]$diffs.Add([pscustomobject]@{
-                Type        = "Equal"
-                Path        = $path
-                SystemValue = $systemConfig
-                ConfigValue = $desiredConfig
-            })
+                    Type = "Equal"
+                    Path = $path
+                    SystemValue = $systemConfig
+                    ConfigValue = $desiredConfig
+                })
 
             continue
         }
 
         if (-not $stateEqual) {
             [void]$diffs.Add([pscustomobject]@{
-                Type        = "Changed"
-                Path        = "$path.State"
-                SystemValue = $systemConfig.State
-                ConfigValue = $desiredConfig.State
-            })
+                    Type = "Changed"
+                    Path = "$path.State"
+                    SystemValue = $systemConfig.State
+                    ConfigValue = $desiredConfig.State
+                })
         }
 
         if (-not $startupEqual) {
             [void]$diffs.Add([pscustomobject]@{
-                Type        = "Changed"
-                Path        = "$path.Startup"
-                SystemValue = $systemConfig.Startup
-                ConfigValue = $desiredConfig.Startup
-            })
+                    Type = "Changed"
+                    Path = "$path.Startup"
+                    SystemValue = $systemConfig.Startup
+                    ConfigValue = $desiredConfig.Startup
+                })
         }
     }
 
@@ -346,7 +305,7 @@ Simulates Windows service configuration changes inside sandbox.
     }
 
     $results = @{
-        Status  = "Success"
+        Status = "Success"
         Changed = @()
     }
 
@@ -366,8 +325,8 @@ Simulates Windows service configuration changes inside sandbox.
                 if ($currentValue -eq $desiredValue) { continue }
 
                 $results.Changed += @{
-                    Name     = $service
-                    Field    = $field
+                    Name = $service
+                    Field = $field
                     OldValue = $currentValue
                     NewValue = $desiredValue
                 }

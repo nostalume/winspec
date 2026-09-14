@@ -42,16 +42,16 @@ function Initialize-SandboxDirectory {
 function New-SandboxState {
     @{
         Registry = @{
-            Explorer  = @{
-                ShowHidden  = $false
+            Explorer = @{
+                ShowHidden = $false
                 ShowFileExt = $false
             }
             Clipboard = @{}
-            Theme     = @{}
-            Desktop   = @{}
+            Theme = @{}
+            Desktop = @{}
         }
-        Service  = @{}
-        Feature  = @{}
+        Service = @{}
+        Feature = @{}
     }
 }
 
@@ -67,12 +67,12 @@ function New-SandboxContext {
     )
 
     @{
-        Mode      = $Mode
-        Snapshot  = $Snapshot
+        Mode = $Mode
+        Snapshot = $Snapshot
         StartTime = Get-Date
-        Changes   = @()
-        State     = New-SandboxState
-        Original  = $null
+        Changes = @()
+        State = New-SandboxState
+        Original = $null
     }
 }
 
@@ -99,7 +99,7 @@ function ConvertTo-SandboxHashtable {
 
 function Get-SandboxContext {
     if (Test-Path $Script:Sandbox) {
-        return ConvertTo-SandboxHashtable (Get-Content $Script:Sandbox -Raw | ConvertFrom-Json -Depth 20)
+        return ConvertTo-SandboxHashtable (Get-Content $Script:Sandbox -Raw | ConvertFrom-Json)
     }
     return $null
 }
@@ -152,7 +152,7 @@ function Import-SandboxState {
     }
 
     try {
-        $json = ConvertTo-SandboxHashtable (Get-Content $file -Raw | ConvertFrom-Json -Depth 20)
+        $json = ConvertTo-SandboxHashtable (Get-Content $file -Raw | ConvertFrom-Json)
         return $json.state
     }
     catch {
@@ -172,8 +172,8 @@ function Export-SandboxState {
     @{
         state = $State
     } |
-    ConvertTo-Json -Depth 20 |
-    Set-Content $file -Encoding UTF8
+        ConvertTo-Json -Depth 20 |
+        Set-Content $file -Encoding UTF8
 
     Write-Log -Level OK -Message "Sandbox snapshot exported: $Snapshot"
 }
@@ -186,7 +186,7 @@ function Get-SandboxSnapshots {
     }
 
     Get-ChildItem $Script:SnapshotsDir -Filter "*.json" |
-    ForEach-Object { $_.BaseName }
+        ForEach-Object { $_.BaseName }
 }
 
 
@@ -226,7 +226,7 @@ function Enter-Sandbox {
     }
 
     # deep clone via json
-    $ctx.Original = ConvertTo-SandboxHashtable ($ctx.State | ConvertTo-Json -Depth 20 | ConvertFrom-Json -Depth 20)
+    $ctx.Original = ConvertTo-SandboxHashtable ($ctx.State | ConvertTo-Json -Depth 20 | ConvertFrom-Json)
     $Script:SandboxContext = $ctx
     Save-SandboxContext $ctx
 
@@ -273,8 +273,8 @@ function Export-SandboxHistory {
     )
 
     $Context |
-    ConvertTo-Json -Depth 20 |
-    Set-Content $file
+        ConvertTo-Json -Depth 20 |
+        Set-Content $file
 
     Write-Log -Level OK -Message "Sandbox history saved: $file"
 }
@@ -323,7 +323,7 @@ function Reset-SandboxState {
         return
     }
 
-    $Script:SandboxContext.State = ConvertTo-SandboxHashtable ($Script:SandboxContext.Original | ConvertTo-Json -Depth 20 | ConvertFrom-Json -Depth 20)
+    $Script:SandboxContext.State = ConvertTo-SandboxHashtable ($Script:SandboxContext.Original | ConvertTo-Json -Depth 20 | ConvertFrom-Json)
     $Script:SandboxContext.Changes = @()
     Save-SandboxContext $Script:SandboxContext
 
@@ -348,9 +348,9 @@ function Update-SandboxChanges {
 
     $Script:SandboxContext.Changes += @{
         provider = $Provider
-        action   = $Action
-        data     = $Data
-        time     = Get-Date
+        action = $Action
+        data = $Data
+        time = Get-Date
     }
     Save-SandboxContext $Script:SandboxContext
 }

@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "name": "WindowsDebloat",
+  "kind": "Action",
+  "protocolVersion": 1,
+  "script": "provider.ps1",
+  "operations": ["run", "preview"]
+}

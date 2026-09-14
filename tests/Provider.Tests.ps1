@@ -3,16 +3,16 @@
 
 BeforeAll {
     # Import core modules directly (do NOT dot-source winspec.ps1)
-    $winspecRoot = Join-Path $PSScriptRoot ".." "winspec"
-    
+    $winspecRoot = Join-Path (Join-Path $PSScriptRoot "..") "winspec"
+
     Import-Module (Join-Path $winspecRoot "logging.psm1")                  -Force -Global
-    Import-Module (Join-Path $winspecRoot "utils.psm1")                    -Force -Global
+    Import-Module (Join-Path $winspecRoot "spec.psm1")                     -Force -Global
     Import-Module (Join-Path $winspecRoot "schema.psm1")                   -Force -Global
     Import-Module (Join-Path $winspecRoot "state.psm1")                    -Force -Global
     Import-Module (Join-Path $winspecRoot "sandbox.psm1")                  -Force -Global
-    Import-Module (Join-Path $winspecRoot "managers" "registry.psm1")      -Force -Global
-    Import-Module (Join-Path $winspecRoot "managers" "feature.psm1")       -Force -Global
-    Import-Module (Join-Path $winspecRoot "managers" "service.psm1")       -Force -Global
+    Import-Module (Join-Path (Join-Path $winspecRoot "providers") "registry.psm1") -Force -Global
+    Import-Module (Join-Path (Join-Path $winspecRoot "providers") "feature.psm1") -Force -Global
+    Import-Module (Join-Path (Join-Path $winspecRoot "providers") "service.psm1") -Force -Global
 }
 
 Describe "Registry Provider" {
@@ -42,13 +42,13 @@ Describe "Registry Provider" {
                 Mock Get-ItemProperty {
                     return [PSCustomObject]@{ TestValue = "TestData" }
                 }
-                
+
                 $value = Get-RegistryValue -Path "HKCU:\Software\TestKey" -Property "TestValue"
                 $value | Should -Be "TestData"
             }
         }
     }
-    
+
     Context "Test-RegistryState" {
         It "Should test registry state with desired hashtable" {
             InModuleScope registry {
@@ -70,20 +70,20 @@ Describe "Registry Provider" {
                 Mock Get-ItemProperty {
                     return [PSCustomObject]@{ MenuShowDelay = "400" }
                 }
-                
+
                 $desired = @{ Desktop = @{ MenuShowDelay = "400" } }
                 $result = Test-RegistryState -Desired $desired
                 $result | Should -BeTrue
             }
         }
     }
-    
+
     Context "Set-RegistryValue" {
         It "Should set registry value without error" {
             InModuleScope registry {
                 Mock Test-Path { return $true }
                 Mock Set-ItemProperty { }
-                
+
                 { Set-RegistryValue -Path "HKCU:\Software\TestKey" -Property "TestValue" -Type "String" -Value "TestData" } | Should -Not -Throw
             }
         }
@@ -102,25 +102,22 @@ Describe "Feature Provider" {
         It "Should not spawn elevated scripts when exporting features without Administrator privileges" {
             InModuleScope feature {
                 Mock Test-IsAdmin { return $false }
-                Mock Invoke-AdminCommand { throw "Feature export should not spawn an elevated script" }
-
                 $state = Export-FeatureState
 
                 $state.Count | Should -Be 0
-                Should -Invoke Invoke-AdminCommand -Times 0 -Exactly
             }
         }
 
         It "Should refuse to mutate features when process is not elevated" {
             InModuleScope feature {
                 Mock Test-IsAdmin { return $false }
-                Mock Invoke-AdminCommand { throw "Feature provider should not spawn an elevated script" }
+                $output = @(Set-FeatureState `
+                        -Desired @{ TestFeature = "enabled" } 6>&1)
+                $result = $output[0]
 
-                $result = Set-FeatureState -Desired @{ TestFeature = "enabled" }
-
+                $output.Count | Should -Be 1
                 $result.Status | Should -Be "Error"
                 $result.Reason | Should -Be "RequiresAdministrator"
-                Should -Invoke Invoke-AdminCommand -Times 0 -Exactly
             }
         }
     }
@@ -132,34 +129,33 @@ Describe "Feature Provider" {
                 Mock Export-FeatureState {
                     return @{ TestFeature = "Enabled" }
                 }
-                
+
                 $state = Get-FeatureState -FeatureName "TestFeature"
                 $state | Should -Not -BeNullOrEmpty
                 $state | Should -Be "Enabled"
             }
         }
     }
-    
+
     Context "Test-FeatureState" {
         It "Should test feature state with desired hashtable" {
             InModuleScope feature {
                 Mock Export-FeatureState {
                     return @{ TestFeature = "Enabled" }
                 }
-                
+
                 $desired = @{ TestFeature = "enabled" }
                 $result = Test-FeatureState -Desired $desired
                 $result | Should -BeTrue
             }
         }
     }
-    
+
     Context "Set-FeatureState" {
         It "Should process feature state with WhatIf" {
             InModuleScope feature {
                 Mock Export-FeatureState { return @{ TestFeature = "Disabled" } }
-                Mock Invoke-AdminCommand { }
-                
+
                 { Set-FeatureState -Desired @{ TestFeature = "enabled" } -WhatIf } | Should -Not -Throw
             }
         }
@@ -216,30 +212,30 @@ Describe "Service Provider" {
             InModuleScope service {
                 Mock Get-Service {
                     return [PSCustomObject]@{
-                        Name      = "TestService"
-                        Status    = "Running"
+                        Name = "TestService"
+                        Status = "Running"
                         StartType = "Automatic"
                     }
                 }
-                
+
                 $state = Get-ServiceState -ServiceNames @("TestService")
                 $state | Should -Not -BeNullOrEmpty
                 $state.Keys | Should -Contain "TestService"
             }
         }
     }
-    
+
     Context "Test-ServiceState" {
         It "Should test service state with desired hashtable" {
             InModuleScope service {
                 Mock Get-Service {
                     return [PSCustomObject]@{
-                        Name      = "TestService"
-                        Status    = "Running"
+                        Name = "TestService"
+                        Status = "Running"
                         StartType = "Automatic"
                     }
                 }
-                
+
                 $desired = @{ TestService = @{ State = "Running"; Startup = "Automatic" } }
                 $result = Test-ServiceState -Desired $desired
                 $result | Should -BeTrue
@@ -250,8 +246,8 @@ Describe "Service Provider" {
             InModuleScope service {
                 Mock Get-Service {
                     return [PSCustomObject]@{
-                        Name      = "TestService"
-                        Status    = "Running"
+                        Name = "TestService"
+                        Status = "Running"
                         StartType = "Automatic"
                     }
                 }
@@ -278,16 +274,17 @@ Describe "Service Provider" {
         It "Should refuse to mutate services when process is not elevated" {
             InModuleScope service {
                 Mock Test-IsAdmin { return $false }
-                Mock Invoke-AdminCommand { throw "Service provider should not spawn an elevated script" }
                 Mock Set-Service { throw "Set-Service should not run without elevation" }
                 Mock Start-Service { throw "Start-Service should not run without elevation" }
                 Mock Stop-Service { throw "Stop-Service should not run without elevation" }
 
-                $result = Set-ServiceState -Desired @{ wuauserv = @{ Startup = "disabled"; State = "stopped" } }
+                $output = @(Set-ServiceState `
+                        -Desired @{ wuauserv = @{ Startup = "disabled"; State = "stopped" } } 6>&1)
+                $result = $output[0]
 
+                $output.Count | Should -Be 1
                 $result.Status | Should -Be "Error"
                 $result.Reason | Should -Be "RequiresAdministrator"
-                Should -Invoke Invoke-AdminCommand -Times 0 -Exactly
                 Should -Invoke Set-Service -Times 0 -Exactly
                 Should -Invoke Start-Service -Times 0 -Exactly
                 Should -Invoke Stop-Service -Times 0 -Exactly
@@ -336,8 +333,8 @@ Describe "Service Provider" {
             InModuleScope service {
                 Mock Get-Service {
                     return [PSCustomObject]@{
-                        Name      = "TestService"
-                        Status    = "Stopped"
+                        Name = "TestService"
+                        Status = "Stopped"
                         StartType = "Manual"
                     }
                 }
@@ -346,7 +343,7 @@ Describe "Service Provider" {
                 Mock Set-Service { }
                 Mock Test-IsAdmin { return $true }
             }
-            
+
             { Set-ServiceState -Desired @{ TestService = @{ State = "Running" } } -WhatIf } | Should -Not -Throw
         }
     }
@@ -384,7 +381,7 @@ Describe "Service Provider" {
                 $desired = @{ TestService = @{ State = "running"; Startup = "automatic" } }
                 $diffs = @(Compare-ServiceState -System $system -Desired $desired)
 
-                $diffs | Where-Object Type -eq "Removed" | Should -BeNullOrEmpty
+                $diffs | Where-Object Type -EQ "Removed" | Should -BeNullOrEmpty
             }
         }
     }

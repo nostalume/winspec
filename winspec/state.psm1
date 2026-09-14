@@ -1,847 +1,484 @@
-# state.psm1 - Common state manipulation functions for WinSpec
-# Provides shared functionality for pull, push, diff, merge, and sync commands
-
-# Import dependent modules
-$ModuleRoot = $PSScriptRoot
-Import-Module (Join-Path $ModuleRoot "logging.psm1") -ErrorAction Stop
-Import-Module (Join-Path $ModuleRoot "utils.psm1") -ErrorAction Stop
-Import-Module (Join-Path $ModuleRoot "checkpoint.psm1") -ErrorAction Stop
-Import-Module (Join-Path $ModuleRoot "schema.psm1") -ErrorAction Stop
-Import-Module (Join-Path $ModuleRoot "sandbox.psm1") -ErrorAction SilentlyContinue
-
-# =============================================================================
-# PROVIDER RESOLUTION
-# =============================================================================
-
-# =============================================================================
-# PROVIDER DISCOVERY
-# =============================================================================
-
-function Get-Providers {
-    <#
-    .SYNOPSIS
-        Discover provider modules.
-
-    .DESCRIPTION
-        Scans provider directories and returns structured provider metadata.
-        If BasePath is not specified, the module root will be used.
-
-    .PARAMETER BasePath
-        Optional root directory to scan. Defaults to $ModuleRoot.
-
-    .PARAMETER Type
-        Provider type to filter by. If omitted, all provider types are scanned.
-
-    .OUTPUTS
-        PSCustomObject with properties:
-            Type
-            Name
-            Path
-#>
-    [CmdletBinding()]
-    param(
-        [string]$BasePath = $ModuleRoot,
-        
-        [ValidateSet("Declarative", "Trigger")]
-        [string]$Type
-    )
-
-    $results = [System.Collections.Generic.List[object]]::new()
-    if (-not (Test-Path $BasePath)) {
-        Write-Verbose "Provider base path not found: $BasePath"
-        return @($results)
-    }
-
-    # Resolve which directories to scan
-    $typeMap = @{
-        Declarative = "managers"
-        Trigger     = "triggers"
-    }
-
-    $typeDirs = if ($Type) {
-        @($typeMap[$Type])
-    }
-    else {
-        $typeMap.Values
-    }
-
-    foreach ($dir in $typeDirs) {
-        $providerDir = Join-Path $BasePath $dir
-        if (-not (Test-Path $providerDir)) {
-            continue
-        }
-
-        $files = Get-ChildItem -Path $providerDir -Filter "*.psm1" -ErrorAction SilentlyContinue
-        foreach ($file in $files) {
-            try {
-                $module = Import-Module $file.FullName -PassThru -ErrorAction Stop
-                $info = & $module Get-ProviderInfo
-
-                if ($null -ne $info -and $info.Name) {
-
-                    $results.Add([PSCustomObject]@{
-                        Type     = $info.Type
-                        Name     = $info.Name
-                        Path     = $file.FullName
-                        Module   = $module
-                        Commands = $module.ExportedCommands
-                    })
-
-                    Write-Verbose "Discovered provider: $($info.Name) ($($info.Type))"
-                }
-            }
-            catch {
-                Write-Verbose "Skipping provider file $($file.Name): $_"
-            }
-        }
-    }
-
-    return @($results)
-}
+Import-Module (Join-Path $PSScriptRoot 'comparison.psm1') -ErrorAction Stop
+Import-Module (Join-Path $PSScriptRoot 'provider-runtime.psm1') -ErrorAction Stop
 
 function Get-Managers {
-    param([string]$ConfigPath)
-
-    $providers = [System.Collections.Generic.List[object]]::new()
-    foreach ($provider in @(Get-Providers -Type Declarative)) { $providers.Add($provider) }
-
-    if ($ConfigPath) {
-        foreach ($provider in @(Get-Providers -Type Declarative -BasePath $ConfigPath)) { $providers.Add($provider) }
-    }
-
-    return @($providers)
-}
-
-function Get-Triggers {
-    param([string]$ConfigPath)
-
-    $providers = [System.Collections.Generic.List[object]]::new()
-    foreach ($provider in @(Get-Providers -Type Trigger)) { $providers.Add($provider) }
-
-    if ($ConfigPath) {
-        foreach ($provider in @(Get-Providers -Type Trigger -BasePath $ConfigPath)) { $providers.Add($provider) }
-    }
-
-    return @($providers)
-}
-
-function Resolve-Triggers {
-    param(
-        $Config,
-        $UserTriggers,
-        [string]$ConfigPath
+    return @(
+        [pscustomobject]@{Name = 'Registry'; Type = 'State'; Path = (Join-Path $PSScriptRoot 'providers/registry.psm1') }
+        [pscustomobject]@{Name = 'Service'; Type = 'State'; Path = (Join-Path $PSScriptRoot 'providers/service.psm1') }
+        [pscustomobject]@{Name = 'Feature'; Type = 'State'; Path = (Join-Path $PSScriptRoot 'providers/feature.psm1') }
     )
-
-    $providers = Get-Triggers -ConfigPath $ConfigPath
-    $resolved = [System.Collections.Generic.List[object]]::new()
-
-    # determine execution set
-    if (-not $UserTriggers) {
-        if (-not $Config -or -not $Config.ContainsKey("Trigger")) {
-            return $resolved
-        }
-        $names = $Config.Trigger
-    }
-    elseif ($UserTriggers -eq "*") {
-        $names = $providers.Name
-    }
-    elseif ($UserTriggers -is [string]) {
-        $names = @($UserTriggers)
-    }
-    elseif ($UserTriggers -is [array]) {
-        $names = $UserTriggers
-    }
-
-    $providerMap = @{}
-    foreach ($p in $providers) {
-        $providerMap[$p.Name] = $p
-        $providerMap[$p.Name.ToString().ToLowerInvariant()] = $p
-    }
-    foreach ($name in $names) {
-        $lookupName = "$name"
-        $provider = $providerMap[$lookupName]
-        if (-not $provider) {
-            $provider = $providerMap[$lookupName.ToLowerInvariant()]
-        }
-        if (-not $provider) {
-            Write-Log -Level ERROR -Message "Trigger not found: $name"
-            continue
-        }
-
-        $value = @{}
-        if ($Config -and $Config.ContainsKey("TriggerConfig") -and $Config.TriggerConfig -is [hashtable]) {
-            if ($Config.TriggerConfig.ContainsKey($lookupName)) {
-                $value = $Config.TriggerConfig[$lookupName]
-            }
-            elseif ($Config.TriggerConfig.ContainsKey($provider.Name)) {
-                $value = $Config.TriggerConfig[$provider.Name]
-            }
-        }
-
-        $resolved.Add([pscustomobject]@{
-            Name     = $provider.Name
-            Provider = $provider
-            Value    = $value
-        })
-    }
-
-    return @($resolved)
-}
-
-function Get-ForwardedCommonParameters {
-    [CmdletBinding()]
-    param([hashtable]$BoundParameters)
-
-    $common = @{}
-    foreach ($name in @("WhatIf", "Confirm", "Verbose", "Debug", "ErrorAction", "WarningAction", "InformationAction")) {
-        if ($BoundParameters.ContainsKey($name)) {
-            $common[$name] = $BoundParameters[$name]
-        }
-    }
-    return $common
-}
-
-function Test-WinSpecSandboxActive {
-    $module = @(Get-Module sandbox)[-1]
-    if ($module -and $module.ExportedCommands.ContainsKey("Test-SandboxActive")) {
-        return & $module.ExportedCommands["Test-SandboxActive"]
-    }
-
-    $cmd = Get-Command Test-SandboxActive -ErrorAction SilentlyContinue
-    if (-not $cmd) { return $false }
-    return & $cmd
-}
-
-function Get-WinSpecSandboxMode {
-    $module = @(Get-Module sandbox)[-1]
-    if ($module -and $module.ExportedCommands.ContainsKey("Get-SandboxMode")) {
-        return & $module.ExportedCommands["Get-SandboxMode"]
-    }
-
-    $cmd = Get-Command Get-SandboxMode -ErrorAction SilentlyContinue
-    if (-not $cmd) { return "Live" }
-    return & $cmd
-}
-
-function Get-ProviderExportedCommand {
-    param(
-        [Parameter(Mandatory)]
-        [System.Management.Automation.PSModuleInfo]$Module,
-
-        [Parameter(Mandatory)]
-        [string]$Name
-    )
-
-    if ($Module.ExportedCommands.ContainsKey($Name)) {
-        return $Module.ExportedCommands[$Name]
-    }
-    return $null
 }
 
 function Resolve-ProviderList {
-    param([string[]]$Providers = @())
-    
-    $defaultProviders = @("Registry", "Feature", "Service")
-    
-    if ($providers -and $Providers.Count -gt 0) { return $Providers }
-    
-    return $defaultProviders
+    param([object[]]$Available, [string[]]$Providers)
+    if (-not $Providers -or $Providers.Count -eq 0) { return @($Available) }
+    $result = @()
+    foreach ($name in $Providers) {
+        $match = @($Available | Where-Object Name -ieq $name)
+        if ($match.Count -ne 1) { throw "UnknownProvider: '$name'" }
+        $result += $match[0]
+    }
+    return $result
 }
 
-
-function Resolve-ProviderRuntime {
-    [CmdletBinding()]
-    param([Parameter(Mandatory)] [pscustomobject]$Provider)
-
-    if ($Provider.PSObject.Properties.Name -contains "Commands" -and $Provider.Commands) {
-        return $Provider
-    }
-
+function Get-ProviderCommand {
+    param($Provider, [string]$Verb)
     $module = Import-Module $Provider.Path -PassThru -ErrorAction Stop
-    return [pscustomobject]@{
-        Type     = $Provider.Type
-        Name     = $Provider.Name
-        Path     = $Provider.Path
-        Module   = $module
-        Commands = $module.ExportedCommands
-    }
+    $name = "$Verb-$($Provider.Name)State"
+    $command = $module.ExportedCommands[$name]
+    if (-not $command) { return $null }
+    return $command
 }
-
-function Get-ProviderRuntimeCommand {
-    param(
-        [Parameter(Mandatory)] $Runtime,
-        [Parameter(Mandatory)] [string]$Name
-    )
-
-    if ($Runtime.Commands -and $Runtime.Commands.ContainsKey($Name)) {
-        return $Runtime.Commands[$Name]
-    }
-    return $null
-}
-
-function Resolve-ProviderCommand {
-    [CmdletBinding()]
-    param(
-        [pscustomobject]$Provider,
-        [ValidateSet("Export", "Merge", "Compare", "Test", "Set")]
-        [string]$Operation
-    )
-
-    $runtime = Resolve-ProviderRuntime -Provider $Provider
-    $cmdName = "$Operation-$($runtime.Name)State"
-    Write-Verbose "Resolving provider command: $cmdName"
-
-    return Get-ProviderRuntimeCommand -Runtime $runtime -Name $cmdName
-}
-
-# =============================================================================
-# STATE CAPTURE
-# =============================================================================
 
 function Export-ProviderState {
-    [CmdletBinding()]
-    param(
-        [pscustomobject]$Provider
-    )
-
-    try {
-        $cmd = Resolve-ProviderCommand -Provider $Provider -Operation Export
-        if (-not $cmd) {
-            Write-Log -Level WARN -Message "Provider $($Provider.Name) missing export function"
-            return $null
-        }
-
-        Write-Verbose "Executing provider export: $($cmd.Name)"
-        return & $cmd
-    }
-    catch {
-        Write-Debug $_
-        Write-Log -Level WARN -Message "Failed exporting provider $($Provider.Name)"
-        return $null
-    }
+    param([Parameter(Mandatory)]$Provider)
+    $command = Get-ProviderCommand $Provider 'Export'
+    if (-not $command) { throw "MissingProviderCapability: '$($Provider.Name)' lacks capture" }
+    return & $command
 }
 
 function Get-SystemState {
     [CmdletBinding()]
-    param(
-        [string[]]$Providers = @(),
-        [string]$ConfigPath
-    )
-
-    $allProviders = Get-Managers -ConfigPath $ConfigPath
-    if ($DebugPreference -ne "SilentlyContinue") {
-        Write-Debug "Available providers:`n$($allProviders | Out-String)"
-    }
-
-    $Providers = Resolve-ProviderList $Providers
-
-    if ($Providers.Count -gt 0) {
-        $providersToCapture = $allProviders | Where-Object { $Providers -contains $_.Name }
-    }
-    else {
-        $providersToCapture = $allProviders
-    }
-
-    $state = @{}
-
-    foreach ($provider in $providersToCapture) {
-        $providerState = Export-ProviderState -Provider $provider
-        if ($DebugPreference -ne "SilentlyContinue") {
-            Write-Debug "Provider [$($provider.Name)] state:`n$($providerState | Out-String)"
+    param([string[]]$Providers)
+    $result = @{}
+    foreach ($provider in Resolve-ProviderList (Get-Managers) $Providers) {
+        try {
+            $value = Export-ProviderState $provider
         }
-        if ($providerState -is [hashtable] -and $providerState.Count -eq 0) {
-            continue
+        catch {
+            throw "ProviderFailed: '$($provider.Name)' capture: $($_.Exception.Message)"
         }
-        if ($providerState) {
-            $state[$provider.Name] = $providerState
-        }
+        if ($null -ne $value -and $value.Count -gt 0) { $result[$provider.Name] = $value }
     }
-
-    return $state
+    return $result
 }
 
-# =============================================================================
-# STATE COMPARISON
-# =============================================================================
-
 function Compare-ProviderState {
-    param(
-        [pscustomobject]$Provider,
-        [hashtable]$Desired,
-        [hashtable]$Current
-    )
-
-    $differences = @()
-    try {
-        $cmd = Resolve-ProviderCommand -Provider $Provider -Operation Compare
-        if ($cmd) {
-            $differences = & $cmd -System $Current -Desired $Desired
-        }
-    }
-    catch {
-        Write-Log -Level "WARN" -Message "Failed to compare $($Provider.Name) state: $($_.Exception.Message)"
-        return @()
-    }
-    return $differences
+    param([Parameter(Mandatory)]$Provider, [hashtable]$Desired, [hashtable]$Actual)
+    $command = Get-ProviderCommand $Provider 'Compare'
+    if ($command) { return @(& $command -System $Actual -Desired $Desired) }
+    if (Test-WinSpecValueEqual $Desired $Actual) { return @() }
+    return @([pscustomobject]@{Path = $Provider.Name; ConfigValue = $Desired; SystemValue = $Actual; Type = 'Changed' })
 }
 
 function Compare-SystemState {
     [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $true)]
-        [hashtable]$Spec,
-        [hashtable]$Against,
-        [string[]]$Providers = @(),
-        [string]$ConfigPath
-    )
-    
-    $desiredConfig = $Spec
-    $systemConfig = if ($null -eq $Against) { @{} } else { $Against }
-    $providersToCompare = Resolve-ProviderList -Providers $Providers | Where-Object {
-        $desiredConfig.ContainsKey($_) -or $systemConfig.ContainsKey($_)
-    }
-
-    $providerMap = @{}
-    foreach ($provider in Get-Managers -ConfigPath $ConfigPath) {
-        $providerMap[$provider.Name] = $provider
-        $providerMap[$provider.Name.ToString().ToLowerInvariant()] = $provider
-    }
-    
-    $added = [System.Collections.Generic.List[object]]::new()
-    $removed = [System.Collections.Generic.List[object]]::new()
-    $changed = [System.Collections.Generic.List[object]]::new()
-    $equal = [System.Collections.Generic.List[object]]::new()
-    
-    foreach ($providerName in $providersToCompare) {
-        $provider = $providerMap[$providerName]
-        if (-not $provider) {
-            $provider = $providerMap[$providerName.ToLowerInvariant()]
+    param([Parameter(Mandatory)][hashtable]$Spec, [hashtable]$Against, [string[]]$Providers)
+    if ($null -eq $Against) { $Against = Get-SystemState -Providers $Providers }
+    $result = @{Added = @(); Changed = @(); Removed = @(); Equal = @() }
+    foreach ($provider in Resolve-ProviderList (Get-Managers) $Providers) {
+        if (-not $Spec.ContainsKey($provider.Name)) { continue }
+        $actualValue = if ($Against.ContainsKey($provider.Name)) { $Against[$provider.Name] } else { @{} }
+        foreach ($item in @(Compare-ProviderState $provider $Spec[$provider.Name] $actualValue)) {
+            $kind = if ($item.Type -in @('Added', 'Changed', 'Removed', 'Equal')) { $item.Type } else { 'Changed' }
+            $result[$kind] += $item
         }
-        if (-not $provider) {
-            Write-Log -Level "WARN" -Message "Provider not found for comparison: $providerName"
-            continue
-        }
-
-        $name = $provider.Name
-        $systemState = if ($systemConfig.ContainsKey($name)) { $systemConfig[$name] } else { @{} }
-        $desiredState = if ($desiredConfig.ContainsKey($name)) { $desiredConfig[$name] } else { @{} }
-        
-        if ($systemState.Count -eq 0 -and $desiredState.Count -eq 0) { continue }
-        
-        Write-Log -Level "INFO" -Message "Comparing $name state..."
-        
-        $diffs = Compare-ProviderState -Provider $provider -Desired $desiredState -Current $systemState
-        
-        foreach ($diff in $diffs) {
-            switch ($diff.Type) {
-                "Added" { $added.Add($diff) }
-                "Removed" { $removed.Add($diff) }
-                "Changed" { $changed.Add($diff) }
-                "Equal" { $equal.Add($diff) }
-            }
-        }
-        
-        Write-Log -Level "OK" -Message "Found $($diffs.Count) differences in $name"
     }
-    
-    return @{
-        Added   = @($added)
-        Removed = @($removed)
-        Changed = @($changed)
-        Equal   = @($equal)
-    }
+    return $result
 }
 
-# =============================================================================
-# DECLARATIVE PROVIDER EXECUTION
-# =============================================================================
-# 
 function Invoke-Manager {
-<#
-.SYNOPSIS
-    Executes a single declarative provider.
-#>
-
-    [CmdletBinding(SupportsShouldProcess)]
-    param(
-        [Parameter(Mandatory)]
-        [pscustomobject]$Provider,
-
-        [Parameter(Mandatory)]
-        $Config,
-
-        [hashtable]$CommonParameters = @{}
-    )
-
-    $providerName = $Provider.Name
-
-    Write-LogSection -Name $providerName
-
-    try {
-        $runtime = Resolve-ProviderRuntime -Provider $Provider
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Provider, [Parameter(Mandatory)][hashtable]$Config,
+        [hashtable]$CommonParameters = @{})
+    $desired = $Config[$Provider.Name]
+    $test = Get-ProviderCommand $Provider 'Test'
+    $set = Get-ProviderCommand $Provider 'Set'
+    if (-not $test -or -not $set) { throw "MissingProviderCapability: '$($Provider.Name)' lacks test/apply" }
+    if (& $test -Desired $desired) { return @{Status = 'Unchanged' } }
+    if ($CommonParameters.ContainsKey('WhatIf') -and $CommonParameters.WhatIf) {
+        return @{Status = 'Planned' }
     }
-    catch {
-        Write-Log -Level ERROR -Message "Failed to load provider: $providerName"
-        return @{ Status = "Error"; Message = "Provider load failed" }
-    }
-
-    try {
-        $providerName = $runtime.Name
-        $desired = $Config.$providerName
-
-        $testStateCmd = Get-ProviderRuntimeCommand -Runtime $runtime -Name "Test-$($providerName)State"
-        $setStateCmd  = Get-ProviderRuntimeCommand -Runtime $runtime -Name "Set-$($providerName)State"
-        $sandboxCmd   = Get-ProviderRuntimeCommand -Runtime $runtime -Name "Invoke-$($providerName)SandboxApply"
-
-        if (!$testStateCmd -or !$setStateCmd) {
-            Write-Log -Level ERROR -Message "Provider $providerName missing required functions"
-            return @{ Status = "Error"; Message = "Missing provider functions" }
-        }
-
-        $mode = "Live"
-        if (Test-WinSpecSandboxActive) {
-            $mode = Get-WinSpecSandboxMode
-        }
-
-        try {
-            $inDesiredState = & $testStateCmd -Desired $desired
-        }
-        catch {
-            Write-Log -Level ERROR -Message "$providerName test failed: $_"
-            return @{ Status = "Error"; Message = "Test failed" }
-        }
-
-        if ($inDesiredState) {
-            Write-Log -Level OK -Message "$providerName already in desired state"
-            return @{ Status = "AlreadyInDesiredState" }
-        }
-
-        if ($mode -eq "DryRun") {
-            Write-Log -Level INFO -Message "DryRun: $providerName would apply changes"
-            return @{
-                Status  = "DryRun"
-                Pending = $true
-            }
-        }
-
-        if ($PSCmdlet.ShouldProcess($providerName, "Apply configuration")) {
-            try {
-                if ($mode -eq "Mock" -and $sandboxCmd) {
-                    $result = & $sandboxCmd -Desired $desired @CommonParameters
-                    Write-Log -Level INFO -Message "[SANDBOX] $providerName applied"
-                    return $result
-                }
-
-                return & $setStateCmd -Desired $desired @CommonParameters
-            }
-            catch {
-                Write-Log -Level ERROR -Message "$providerName set failed: $_"
-                return @{ Status = "Error"; Message = "Set failed" }
-            }
-        }
-
-        return @{ Status = "DryRun" }
-    }
-    finally {
-        # Keep provider modules loaded after invocation. Removing a provider module can also
-        # remove shared dependency commands (logging/sandbox) that the orchestrator still
-        # needs later in the same push/diff cycle.
-    }
+    return & $set -Desired $desired
 }
 
 function Invoke-Managers {
-    [CmdletBinding(SupportsShouldProcess)]
-    param (
-        [Parameter(Mandatory)]
-        [hashtable]$Config,
-
-        [string[]]$Providers = @(),
-
-        [string]$ConfigPath,
-
-        [hashtable]$CommonParameters = @{}
-    )
-
-    $results = @{}
-
-    $providerObjects = Get-Managers -ConfigPath $ConfigPath
-
-    $restrictedProviders = $Providers
-    if ($Providers.Count -eq 0 -and $Config.ContainsKey('Providers')) {
-        $restrictedProviders = $Config.Providers
-    }
-
-    foreach ($provider in $providerObjects) {
-        $name = $provider.Name
-
-        if ($null -eq $Config.$name) {
-            continue
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][hashtable]$Config, [string[]]$Providers,
+        [hashtable]$CommonParameters = @{})
+    $result = @{}
+    foreach ($provider in Resolve-ProviderList (Get-Managers) $Providers) {
+        if ($Config.ContainsKey($provider.Name)) {
+            $result[$provider.Name] = Invoke-Manager $provider $Config $CommonParameters
         }
-
-        if ($restrictedProviders.Count -gt 0 -and $name -notin $restrictedProviders) {
-            Write-Log -Level "INFO" -Message "Skipping $name (not in Providers list)"
-            continue
-        }
-
-        $results[$name] = Invoke-Manager `
-            -Provider $provider `
-            -Config $Config `
-            -CommonParameters $CommonParameters
     }
-
-    return $results
+    return $result
 }
-
-# =============================================================================
-# TRIGGER EXECUTION
-# =============================================================================
-
-# Avoid name confliction
-function Invoke-TriggerProvider {
-    [CmdletBinding(SupportsShouldProcess)]
-    param(
-        [Parameter(Mandatory)]
-        [pscustomobject]$Provider,
-
-        [hashtable]$Value = @{},
-
-        [hashtable]$CommonParameters = @{}
-    )
-
-    $name = $Provider.Name
-    $path = $Provider.Path
-
-    # Sandbox handling (triggers are non-idempotent)
-    if (Test-WinSpecSandboxActive) {
-        $mode = Get-WinSpecSandboxMode
-        Write-Log -Level "INFO" -Message "Sandbox ($mode): Trigger '$name' would execute"
-
-        $change = @{
-            Status  = "Simulated"
-            Trigger = $name
-            Value   = $Value
-            Mode    = $mode
-        }
-
-        Update-SandboxChanges -Provider "Trigger" -Data $change -Action "Trigger Simulated"
-        return $change
-    }
-
-    try {
-        $module = Import-Module $path -PassThru -ErrorAction Stop
-    }
-    catch {
-        Write-Log -Level "ERROR" -Message "Failed to load trigger: $name"
-        return @{ Status = "Error"; Message = "Failed to load trigger" }
-    }
-
-    try {
-        $cmd = Get-ProviderExportedCommand -Module $module -Name "Invoke-Trigger"
-
-        if (-not $cmd) {
-            Write-Log -Level "ERROR" -Message "Trigger $name missing invoke function"
-            return @{ Status = "Error"; Message = "Missing trigger function" }
-        }
-
-        try {
-            return & $cmd @Value @CommonParameters
-        }
-        catch {
-            Write-Log -Level "ERROR" -Message "Trigger $name failed: $_"
-            return @{ Status = "Error"; Message = $_.Exception.Message }
-        }
-    }
-    finally {
-        # Remove module after execution to free resources (bypass WhatIf - cleanup must always happen)
-        if ($module) {
-            Remove-Module -ModuleInfo $module -Force -ErrorAction SilentlyContinue -WhatIf:$false
-        }
-    }
-}
-
-function Invoke-Triggers {
-    [CmdletBinding(SupportsShouldProcess)]
-    param(
-        $Config,
-        $Triggers,
-        [string]$ConfigPath,
-        [hashtable]$CommonParameters
-    )
-
-    $triggers = Resolve-Triggers `
-        -Config $Config `
-        -UserTriggers $Triggers `
-        -ConfigPath $ConfigPath
-
-    $commonParameters = if ($CommonParameters) {
-        $CommonParameters
-    }
-    else {
-        Get-ForwardedCommonParameters -BoundParameters $PSBoundParameters
-    }
-
-    Write-Debug "Triggers: $($triggers | Out-String)"
-    $results = @{}
-
-    foreach ($t in $triggers) {
-        $name = $t.Name
-        $provider = $t.Provider
-        $value = $t.Value
-
-        $results[$name] = Invoke-TriggerProvider `
-            -Provider $provider `
-            -Value $value `
-            -CommonParameters $commonParameters
-    }
-
-    return $results
-}
-
-
-# =============================================================================
-# MAIN EXECUTION
-# =============================================================================
-
 
 function Test-WinSpecResultSuccessful {
     param($Result)
-
-    if ($Result -is [hashtable]) {
-        if ($Result.ContainsKey("Status") -and $Result.Status -eq "Error") { return $false }
-        foreach ($key in $Result.Keys) {
-            if ($key -eq "Success") { continue }
-            if (-not (Test-WinSpecResultSuccessful -Result $Result[$key])) { return $false }
-        }
-        return $true
+    if ($null -eq $Result) { return $false }
+    if ($Result -is [hashtable] -and $Result.ContainsKey('Status')) {
+        return $Result.Status -notin @('Error', 'Failed')
     }
-
-    if ($Result -is [System.Collections.IEnumerable] -and $Result -isnot [string]) {
-        foreach ($item in $Result) {
-            if (-not (Test-WinSpecResultSuccessful -Result $item)) { return $false }
-        }
-    }
-
     return $true
 }
 
-function Get-ResultLogLevel {
-    param([string]$Status)
-
-    switch ($Status) {
-        "AlreadyInDesiredState" { "OK" }
-        "DryRun" { "INFO" }
-        "Error" { "ERROR" }
-        default { "APPLIED" }
-    }
+function Invoke-WinSpec {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][hashtable]$Spec, [string[]]$Providers, [switch]$WhatIf)
+    $common = if ($WhatIf) { @{WhatIf = $true } } else { @{} }
+    $values = Invoke-Managers -Config $Spec -Providers $Providers -CommonParameters $common
+    $success = $true
+    foreach ($value in $values.Values) { if (-not (Test-WinSpecResultSuccessful $value)) { $success = $false } }
+    return @{Success = $success; Providers = $values }
 }
 
-function Write-WinSpecResultSummary {
-    param([hashtable]$Results)
-
-    Write-LogHeader "Push Results"
-    foreach ($name in $Results.Keys) {
-        if ($name -in @("Success", "Triggers")) { continue }
-        $result = $Results[$name]
-        $status = if ($result.Status) { $result.Status } else { "Completed" }
-        Write-Log -Level (Get-ResultLogLevel -Status $status) -Message "[$name]: $status"
+function Resolve-WinSpecStateProviders {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object[]]$Catalog,
+        [string[]]$Providers,
+        [hashtable]$Spec,
+        [switch]$SpecScoped
+    )
+    $available = @($Catalog | Where-Object Kind -EQ 'State')
+    if ($Providers -and $Providers.Count -gt 0) {
+        return Resolve-ProviderList $available $Providers
     }
+    if ($SpecScoped) {
+        if ($null -eq $Spec) { return @() }
+        return @($available | Where-Object {
+                $Spec.ContainsKey($_.Name)
+            })
+    }
+    return @($available | Where-Object Execution -EQ 'Core')
+}
 
-    if ($Results.ContainsKey("Triggers")) {
-        foreach ($triggerName in $Results.Triggers.Keys) {
-            $triggerResult = $Results.Triggers[$triggerName]
-            $status = if ($triggerResult.Status) { $triggerResult.Status } else { "Completed" }
-            Write-Log -Level (Get-ResultLogLevel -Status $status) -Message "[Trigger:$triggerName]: $status"
+function Assert-WinSpecStateCapability {
+    param([object[]]$Providers, [string]$Operation)
+    foreach ($provider in $Providers) {
+        if ($provider.Execution -eq 'Protocol' -and
+            $Operation -notin @($provider.Operations)) {
+            throw "UnsupportedProviderOperation: '$($provider.Name)' lacks '$Operation'"
         }
     }
 }
 
-function Invoke-WinSpec {
-    [CmdletBinding(SupportsShouldProcess)]
-    param (
-        [Parameter(Mandatory)]
+function Get-WinSpecObservedState {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object[]]$Catalog,
         [hashtable]$Spec,
-        
-        [Parameter(Mandatory = $false)]
-        [string[]]$Providers = @(),
-
-        [Parameter(Mandatory = $false)]
-        $Triggers,
-
-        [Parameter(Mandatory = $false)]
-        [string]$ConfigPath,
-
-        [switch]$Checkpoint
+        [string[]]$Providers,
+        [ValidateRange(1, 3600)][int]$TimeoutSeconds = 300
     )
-
-    Write-LogHeader -Title "WinSpec Execution"
-    Write-Log -Level "INFO" -Message "Validating specification..."
-
-    if (-not (Test-SpecSchema -Spec $Spec)) {
-        Write-Log -Level "ERROR" -Message "Specification validation failed"
-        return @{ Success = $false }
+    $specScoped = $PSBoundParameters.ContainsKey('Spec')
+    $selected = Resolve-WinSpecStateProviders -Catalog $Catalog `
+        -Providers $Providers -Spec $Spec -SpecScoped:$specScoped
+    Assert-WinSpecStateCapability $selected 'capture'
+    $result = @{}
+    $core = @($selected | Where-Object Execution -EQ 'Core' |
+            ForEach-Object Name)
+    if ($core.Count -gt 0) {
+        $captured = Get-SystemState -Providers $core
+        foreach ($key in $captured.Keys) { $result[$key] = $captured[$key] }
     }
-    if ($Checkpoint) {
-        $checkpointResult = New-Checkpoint -Name "WinSpec-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
-        if (-not $checkpointResult.Success) {
-            Write-Log -Level "ERROR" -Message "Checkpoint creation failed; aborting push"
-            return @{
-                Success    = $false
-                Reason     = "CheckpointFailed"
-                Checkpoint = $checkpointResult
+    foreach ($provider in @($selected | Where-Object Execution -EQ 'Protocol')) {
+        $configuration = if ($null -ne $Spec -and
+            $Spec.ContainsKey($provider.Name)) {
+            $Spec[$provider.Name]
+        }
+        else {
+            @{}
+        }
+        $response = Invoke-ExternalProvider -Provider $provider `
+            -Operation capture -RequestInput @{
+            configuration = $configuration
+            executionPolicy = @{ timeoutSeconds = $TimeoutSeconds }
+        } -TimeoutSeconds $TimeoutSeconds
+        if ($response.Status -eq 'Failed') {
+            throw "ProviderFailed: '$($provider.Name)'"
+        }
+        if ($response.Status -ne 'Succeeded') {
+            throw "InvalidProviderStatus: '$($provider.Name)' capture returned '$($response.Status)'"
+        }
+        $result[$provider.Name] = $response.Output
+    }
+    return $result
+}
+
+function Compare-WinSpecState {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][hashtable]$Spec,
+        [Parameter(Mandatory)][object[]]$Catalog,
+        [hashtable]$Against,
+        [string[]]$Providers,
+        [ValidateRange(1, 3600)][int]$TimeoutSeconds = 300
+    )
+    $selected = Resolve-WinSpecStateProviders -Catalog $Catalog `
+        -Providers $Providers -Spec $Spec -SpecScoped
+    Assert-WinSpecStateCapability $selected 'compare'
+    if ($null -eq $Against) {
+        $Against = Get-WinSpecObservedState -Catalog $Catalog -Spec $Spec `
+            -Providers @($selected.Name) -TimeoutSeconds $TimeoutSeconds
+    }
+    $items = @()
+    foreach ($provider in $selected) {
+        if (-not $Spec.ContainsKey($provider.Name)) { continue }
+        $actual = if ($Against.ContainsKey($provider.Name)) {
+            $Against[$provider.Name]
+        }
+        else {
+            @{}
+        }
+        if ($provider.Execution -eq 'Core') {
+            $manager = Get-Managers | Where-Object Name -ieq $provider.Name
+            try {
+                $differences = @(Compare-ProviderState $manager `
+                        $Spec[$provider.Name] $actual)
+            }
+            catch {
+                throw "ProviderFailed: '$($provider.Name)' compare: $($_.Exception.Message)"
+            }
+            $changed = @($differences | Where-Object Type -NE 'Equal')
+            $status = if ($changed.Count -eq 0) { 'Unchanged' } else { 'Different' }
+            $items += [pscustomobject]@{
+                Name = $provider.Name
+                Status = $status
+                Differences = $changed
+            }
+        }
+        else {
+            $response = Invoke-ExternalProvider -Provider $provider `
+                -Operation compare -RequestInput @{
+                configuration = $Spec[$provider.Name]
+                observed = $actual
+                executionPolicy = @{ timeoutSeconds = $TimeoutSeconds }
+            } -TimeoutSeconds $TimeoutSeconds
+            if ($response.Status -eq 'Failed') {
+                throw "ProviderFailed: '$($provider.Name)' compare"
+            }
+            if ($response.Status -notin @('Different', 'Unchanged')) {
+                throw "InvalidProviderStatus: '$($provider.Name)' compare returned '$($response.Status)'"
+            }
+            $items += [pscustomobject]@{
+                Name = $provider.Name
+                Status = $response.Status
+                Differences = @($response.Output.differences)
+                Diagnostics = @($response.Diagnostics)
             }
         }
     }
-
-    $commonParameters = Get-ForwardedCommonParameters -BoundParameters $PSBoundParameters
-
-    Write-LogSection -Name "Providers"
-    $results = Invoke-Managers `
-        -Config $Spec `
-        -Providers $Providers `
-        -ConfigPath $ConfigPath `
-        -CommonParameters $commonParameters
-
-    Write-LogSection -Name "Triggers"
-    $results["Triggers"] = Invoke-Triggers `
-        -Config $Spec `
-        -ConfigPath $ConfigPath `
-        -Triggers $Triggers `
-        -CommonParameters $commonParameters
-
-    $results["Success"] = Test-WinSpecResultSuccessful -Result $results
-    Write-WinSpecResultSummary -Results $results
-
-    return $results
+    $status = if (@($items | Where-Object Status -EQ 'Different').Count -gt 0) {
+        'Different'
+    }
+    else {
+        'Unchanged'
+    }
+    return [pscustomobject]@{ Status = $status; Providers = @($items) }
 }
 
-# =============================================================================
-# EXPORTS
-# =============================================================================
+function Invoke-WinSpecStateApply {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][hashtable]$Spec,
+        [Parameter(Mandatory)][object[]]$Catalog,
+        [string[]]$Providers,
+        [switch]$DryRun,
+        [ValidateRange(1, 3600)][int]$TimeoutSeconds = 300
+    )
+    $selected = Resolve-WinSpecStateProviders -Catalog $Catalog `
+        -Providers $Providers -Spec $Spec -SpecScoped
+    Assert-WinSpecStateCapability $selected 'apply'
+    $results = @()
+    foreach ($provider in $selected) {
+        if (-not $Spec.ContainsKey($provider.Name)) { continue }
+        if ($provider.Execution -eq 'Core') {
+            $manager = Get-Managers | Where-Object Name -ieq $provider.Name
+            $common = if ($DryRun) { @{ WhatIf = $true } } else { @{} }
+            try {
+                $value = Invoke-Manager $manager $Spec $common
+                $coreResult = ConvertTo-WinSpecCoreResult `
+                    -ProviderName $provider.Name -Value $value
+            }
+            catch {
+                $message = $_.Exception.Message
+                $coreResult = [pscustomobject]@{
+                    Status = 'Failed'
+                    Output = @{}
+                    Diagnostics = @([pscustomobject]@{
+                            severity = 'error'
+                            code = ($message -split ':')[0]
+                            message = $message
+                            resource = $provider.Name
+                        })
+                }
+            }
+            $results += [pscustomobject]@{
+                Name = $provider.Name
+                Status = $coreResult.Status
+                Output = $coreResult.Output
+                Diagnostics = @($coreResult.Diagnostics)
+            }
+        }
+        else {
+            $capture = Invoke-ExternalProvider -Provider $provider `
+                -Operation capture -RequestInput @{
+                configuration = $Spec[$provider.Name]
+                executionPolicy = @{ timeoutSeconds = $TimeoutSeconds }
+            } -TimeoutSeconds $TimeoutSeconds
+            if ($capture.Status -eq 'Failed') {
+                throw "ProviderFailed: '$($provider.Name)' capture"
+            }
+            if ($capture.Status -ne 'Succeeded') {
+                throw "InvalidProviderStatus: '$($provider.Name)' capture returned '$($capture.Status)'"
+            }
+            $comparison = Invoke-ExternalProvider -Provider $provider `
+                -Operation compare -RequestInput @{
+                configuration = $Spec[$provider.Name]
+                observed = $capture.Output
+                executionPolicy = @{ timeoutSeconds = $TimeoutSeconds }
+            } -TimeoutSeconds $TimeoutSeconds
+            if ($comparison.Status -eq 'Failed') {
+                throw "ProviderFailed: '$($provider.Name)' compare"
+            }
+            if ($comparison.Status -notin @('Different', 'Unchanged')) {
+                throw "InvalidProviderStatus: '$($provider.Name)' compare returned '$($comparison.Status)'"
+            }
+            if ($comparison.Status -eq 'Unchanged') {
+                $results += [pscustomobject]@{
+                    Name = $provider.Name
+                    Status = 'Unchanged'
+                    Output = $comparison.Output
+                    Diagnostics = @($comparison.Diagnostics)
+                }
+                continue
+            }
+            if ($DryRun) {
+                $results += [pscustomobject]@{
+                    Name = $provider.Name
+                    Status = 'Planned'
+                    Output = $comparison.Output
+                    Diagnostics = @($comparison.Diagnostics)
+                }
+                continue
+            }
+            $response = Invoke-ExternalProvider -Provider $provider `
+                -Operation apply `
+                -RequestInput @{
+                configuration = $Spec[$provider.Name]
+                executionPolicy = @{
+                    timeoutSeconds = $TimeoutSeconds
+                }
+            } -TimeoutSeconds $TimeoutSeconds
+            $results += [pscustomobject]@{
+                Name = $provider.Name
+                Status = $response.Status
+                Output = $response.Output
+                Diagnostics = @($response.Diagnostics)
+            }
+        }
+    }
+    $failed = @($results | Where-Object Status -In @('Failed', 'Error'))
+    return [pscustomobject]@{
+        Status = if ($failed.Count) {
+            'Failed'
+        }
+        elseif ($results.Count -gt 0 -and
+            @($results | Where-Object Status -NE 'Unchanged').Count -eq 0) {
+            'Unchanged'
+        }
+        elseif ($DryRun) {
+            'Planned'
+        }
+        else {
+            'Succeeded'
+        }
+        Providers = @($results)
+    }
+}
 
-Export-ModuleMember -Function @(
-    # get
-    "Get-Providers"
-    "Get-Managers"
-    "Get-Triggers"
-    "Resolve-ProviderList"
-    "Resolve-ProviderCommand"
-    "Resolve-Triggers"
-    "Get-ForwardedCommonParameters"
-    "Get-ProviderExportedCommand"
-    "Resolve-ProviderRuntime"
-    "Get-ProviderRuntimeCommand"
-    "Test-WinSpecResultSuccessful"
-    "Test-WinSpecSandboxActive"
-    "Get-WinSpecSandboxMode"
-    # execution
-    "Invoke-WinSpec"
-    "Invoke-Managers"
-    "Invoke-Triggers"
-    "Invoke-TriggerProvider"
-    # export state
-    "Get-SystemState"
-    "Export-ProviderState"
-    # compare
-    "Compare-ProviderState"
-    "Compare-SystemState"
-)
+function Get-WinSpecCoreDiagnostics {
+    param(
+        [Parameter(Mandatory)][string]$ProviderName,
+        $Value,
+        [Parameter(Mandatory)][string]$Resource
+    )
+    $diagnostics = @()
+    if ($Value -isnot [Collections.IDictionary]) {
+        return $diagnostics
+    }
+    if ($Value.Contains('Diagnostics')) {
+        foreach ($item in @($Value.Diagnostics)) {
+            if ($item -isnot [Collections.IDictionary] -or
+                -not $item.Contains('Code') -or
+                -not $item.Contains('Message')) {
+                continue
+            }
+            $diagnostics += [pscustomobject]@{
+                severity = if ($item.Contains('Severity')) {
+                    [string]$item.Severity
+                }
+                else {
+                    'warning'
+                }
+                code = [string]$item.Code
+                message = [string]$item.Message
+                resource = $Resource
+            }
+        }
+    }
+    if ($Value.Contains('Status') -and
+        $Value.Status -in @('Error', 'Failed')) {
+        $code = if ($Value.Contains('Reason') -and $Value.Reason) {
+            [string]$Value.Reason
+        }
+        else {
+            "${ProviderName}ApplyFailed"
+        }
+        $message = if ($Value.Contains('Message') -and $Value.Message) {
+            [string]$Value.Message
+        }
+        else {
+            "The $Resource resource failed to apply"
+        }
+        return @([pscustomobject]@{
+                severity = 'error'
+                code = $code
+                message = $message
+                resource = $Resource
+            })
+    }
+    foreach ($key in $Value.Keys) {
+        if ($key -in @('Status', 'Reason', 'Message', 'Diagnostics')) { continue }
+        $diagnostics += @(Get-WinSpecCoreDiagnostics `
+                -ProviderName $ProviderName -Value $Value[$key] `
+                -Resource "$Resource.$key")
+    }
+    return $diagnostics
+}
+
+function ConvertTo-WinSpecCoreResult {
+    param(
+        [Parameter(Mandatory)][string]$ProviderName,
+        $Value
+    )
+    $diagnostics = @(Get-WinSpecCoreDiagnostics `
+            -ProviderName $ProviderName -Value $Value `
+            -Resource $ProviderName)
+    $failures = @($diagnostics | Where-Object severity -EQ 'error')
+    $status = if ($failures.Count -gt 0) {
+        'Failed'
+    }
+    elseif ($Value -is [Collections.IDictionary] -and
+        $Value.Contains('Status') -and
+        $Value.Status -in @('Unchanged', 'Planned')) {
+        [string]$Value.Status
+    }
+    else {
+        'Succeeded'
+    }
+    return [pscustomobject]@{
+        Status = $status
+        Output = $Value
+        Diagnostics = $diagnostics
+    }
+}
+
+Export-ModuleMember -Function 'Get-Managers', 'Resolve-ProviderList', 'Export-ProviderState',
+'Get-SystemState', 'Compare-ProviderState', 'Compare-SystemState', 'Invoke-Manager',
+'Invoke-Managers', 'Test-WinSpecResultSuccessful', 'Invoke-WinSpec',
+'Resolve-WinSpecStateProviders', 'Get-WinSpecObservedState',
+'Compare-WinSpecState', 'Invoke-WinSpecStateApply'

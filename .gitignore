@@ -2,21 +2,21 @@
 
 # PowerShell
 *.psm1-imported
-*.psd1
 
-# Logs
+# Logs and test output
 *.log
-*.xml
+/test-results*.xml
 
 # IDE
 .vscode/
 .idea/
+/.agents/
 
 # OS
 .DS_Store
 Thumbs.db
 
-# Temp
+# Temporary files
 *.tmp
 *.temp
 *.bak

@@ -1,0 +1,22 @@
+@{
+    Services = @(
+        'WinDefend'
+        'WdNisSvc'
+        'SecurityHealthService'
+        'DiagTrack'
+        'dmwappushservice'
+        'WSearch'
+        'wuauserv'
+        'UsoSvc'
+        'BITS'
+        'Dnscache'
+        'Dhcp'
+        'NlaSvc'
+        'RemoteRegistry'
+        'TermService'
+        'WinRM'
+        'SysMain'
+        'WerSvc'
+        'Spooler'
+    )
+}

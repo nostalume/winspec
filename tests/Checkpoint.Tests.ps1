@@ -1,9 +1,9 @@
 # Checkpoint and rollback safety tests for WinSpec
 
 BeforeAll {
-    $winspecRoot = Join-Path $PSScriptRoot ".." "winspec"
+    $winspecRoot = Join-Path (Join-Path $PSScriptRoot "..") "winspec"
     Import-Module (Join-Path $winspecRoot "logging.psm1") -Force -Global
-    Import-Module (Join-Path $winspecRoot "utils.psm1") -Force -Global
+    Import-Module (Join-Path $winspecRoot "windows.psm1") -Force -Global
     Import-Module (Join-Path $winspecRoot "checkpoint.psm1") -Force -Global
 }
 
