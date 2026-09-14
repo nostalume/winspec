@@ -3,11 +3,13 @@ BeforeAll {
     $script:WinSpec = Join-Path (Join-Path $script:RepoRoot 'winspec') 'winspec.ps1'
     function Invoke-WinSpecProcess {
         param([string[]]$Arguments)
+        $ErrorActionPreference = 'Continue'
         $text = & pwsh -NoProfile -File $script:WinSpec @Arguments 2>&1 | Out-String
         [pscustomobject]@{ ExitCode = $LASTEXITCODE; Text = $text.Trim() }
     }
     function Invoke-WinSpecHostProcess {
         param([string]$Executable, [string[]]$Arguments)
+        $ErrorActionPreference = 'Continue'
         $text = & $Executable -NoProfile -File $script:WinSpec @Arguments 2>&1 |
             Out-String
         [pscustomobject]@{ ExitCode = $LASTEXITCODE; Text = $text.Trim() }
@@ -82,23 +84,17 @@ Describe 'replacement command surface' {
         @($document.diagnostics.code) | Should -Contain 'ServiceNotManaged'
     }
 
-    It 'reports a missing Feature apply as one failed JSON document' {
-        $path = Join-Path $TestDrive 'missing-feature.winspec.psd1'
-        Set-Content -LiteralPath $path -Value @'
-@{
-    SchemaVersion = 1
-    Feature = @{ 'WinSpec-Definitely-Missing-Feature' = 'enabled' }
-}
-'@
+    It 'reports a failed Script Action as one failed JSON document' {
+        $path = Join-Path $TestDrive 'fail.ps1'
+        Set-Content -LiteralPath $path -Value 'exit 17'
 
-        $result = Invoke-WinSpecProcess @('apply', $path, '-Json')
+        $result = Invoke-WinSpecProcess @('run', $path, '-Json')
 
         $result.ExitCode | Should -Be 3
         $document = $result.Text | ConvertFrom-Json
         $document.status | Should -Be 'Failed'
-        $document.results.providers[0].Status | Should -Be 'Failed'
-        @($document.results.providers[0].Diagnostics).Count |
-            Should -BeGreaterThan 0
+        $document.results.actions[0].Status | Should -Be 'Failed'
+        $document.results.actions[0].ExitCode | Should -Be 17
     }
 
     It 'validates a data-only spec and rejects a ps1 spec' {

@@ -3,6 +3,7 @@ BeforeAll {
     $script:WinSpec = Join-Path (Join-Path $script:RepoRoot 'winspec') 'winspec.ps1'
     function Invoke-WinSpecIntegration {
         param([string[]]$Arguments)
+        $ErrorActionPreference = 'Continue'
         $text = & pwsh -NoProfile -File $script:WinSpec @Arguments 2>&1 | Out-String
         [pscustomobject]@{ExitCode = $LASTEXITCODE; Text = $text.Trim() }
     }

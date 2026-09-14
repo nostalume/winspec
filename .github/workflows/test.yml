@@ -9,9 +9,19 @@ on:
     # Run weekly on Sunday at 00:00 UTC
     - cron: '0 0 * * 0'
 
+permissions:
+  actions: read
+  checks: write
+  contents: read
+
+concurrency:
+  group: test-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: windows-latest
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -22,7 +32,7 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v7
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
     - name: Install Pester
       run: |
@@ -40,21 +50,21 @@ jobs:
         $config.Run.Exit = $true
         $config.TestResult.Enabled = $true
         $config.TestResult.OutputPath = "./test-results.xml"
-        $config.TestResult.OutputFormat = "NUnitXml"
+        $config.TestResult.OutputFormat = "NUnit3"
 
         Invoke-Pester -Configuration $config
 
     - name: Upload test results
-      uses: actions/upload-artifact@v7
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
       if: always()
       with:
         name: test-results-${{ matrix.shell }}
         path: ./test-results.xml
 
     - name: Publish test results
-      uses: dorny/test-reporter@v3
-      if: always()
+      uses: dorny/test-reporter@1cc81a5edf733718d4850df304aaa21c05cd7280 # v3
+      if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
       with:
         name: Test Results (${{ matrix.shell }})
         path: ./test-results.xml
-        reporter: java-junit
+        reporter: dotnet-nunit

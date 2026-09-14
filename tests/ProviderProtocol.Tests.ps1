@@ -444,16 +444,25 @@ $request = [Console]::In.ReadToEnd() | ConvertFrom-Json
             EntryPoint = Join-Path $TestDrive 'missing.ps1'
             PackageRoot = $TestDrive
         }
-        $before = @(Get-ChildItem -LiteralPath ([IO.Path]::GetTempPath()) `
-                -Directory -Filter 'winspec-provider-*').FullName
+        $temporaryRoot = Join-Path $TestDrive 'provider-temporary-root'
+        New-Item -ItemType Directory -Path $temporaryRoot | Out-Null
+        $previousTemp = $env:TEMP
+        $previousTmp = $env:TMP
+        try {
+            $env:TEMP = $temporaryRoot
+            $env:TMP = $temporaryRoot
+            { Invoke-ExternalProvider -Provider $provider -Operation run -Input @{
+                    configuration = @{ value = ('x' * (4MB + 1)) }
+                } -TimeoutSeconds 10 } |
+                Should -Throw '*ProviderRequestTooLarge*'
 
-        { Invoke-ExternalProvider -Provider $provider -Operation run -Input @{
-                configuration = @{ value = ('x' * (4MB + 1)) }
-            } -TimeoutSeconds 10 } | Should -Throw '*ProviderRequestTooLarge*'
-
-        $after = @(Get-ChildItem -LiteralPath ([IO.Path]::GetTempPath()) `
-                -Directory -Filter 'winspec-provider-*').FullName
-        @($after | Where-Object { $_ -notin $before }).Count | Should -Be 0
+            @(Get-ChildItem -LiteralPath $temporaryRoot -Directory `
+                    -Filter 'winspec-provider-*').Count | Should -Be 0
+        }
+        finally {
+            $env:TEMP = $previousTemp
+            $env:TMP = $previousTmp
+        }
     }
 }
 

@@ -9,6 +9,7 @@ BeforeAll {
 
     function Invoke-HostProcess {
         param([string]$HostPath, [string[]]$Arguments)
+        $ErrorActionPreference = 'Continue'
         $text = & $HostPath -NoProfile @Arguments 2>&1 | Out-String
         return [pscustomobject]@{ ExitCode = $LASTEXITCODE; Text = $text }
     }
