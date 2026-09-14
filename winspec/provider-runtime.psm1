@@ -421,21 +421,26 @@ function Invoke-ExternalProvider {
         $start.RedirectStandardOutput = $true
         $start.RedirectStandardError = $true
         $utf8 = New-Object Text.UTF8Encoding($false)
+        if ($null -ne $start.PSObject.Properties['StandardInputEncoding']) {
+            $start.StandardInputEncoding = $utf8
+        }
         $start.StandardOutputEncoding = $utf8
         $start.StandardErrorEncoding = $utf8
 
         $process = New-Object Diagnostics.Process
         $process.StartInfo = $start
-        if (-not $process.Start()) {
-            throw "ProviderStartFailed: '$($Provider.Name)'"
+        $originalInputEncoding = [Console]::InputEncoding
+        try {
+            [Console]::InputEncoding = $utf8
+            if (-not $process.Start()) {
+                throw "ProviderStartFailed: '$($Provider.Name)'"
+            }
+            $process.StandardInput.Write($requestJson)
+            $process.StandardInput.Close()
         }
-        # StreamWriter differs across Windows PowerShell hosts and can prepend a
-        # BOM. The provider protocol is explicitly BOM-free UTF-8.
-        $requestBytes = $utf8.GetBytes($requestJson)
-        $process.StandardInput.BaseStream.Write(
-            $requestBytes, 0, $requestBytes.Length)
-        $process.StandardInput.BaseStream.Flush()
-        $process.StandardInput.Close()
+        finally {
+            [Console]::InputEncoding = $originalInputEncoding
+        }
         $receiveParameters = @{
             Process = $process
             TimeoutSeconds = $TimeoutSeconds

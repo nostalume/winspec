@@ -413,10 +413,17 @@ $request = [Console]::In.ReadToEnd() | ConvertFrom-Json
 
         $value = -join @(
             [char]0x4f60, [char]0x597d, [char]0x20, [char]0x220e)
-        $response = Invoke-ExternalProvider -Provider $provider -Operation capture -Input @{
-            configuration = @{ value = $value }
-            arguments = @()
-        } -TimeoutSeconds 10
+        $originalInputEncoding = [Console]::InputEncoding
+        try {
+            [Console]::InputEncoding = New-Object Text.UnicodeEncoding($false, $true)
+            $response = Invoke-ExternalProvider -Provider $provider -Operation capture -Input @{
+                configuration = @{ value = $value }
+                arguments = @()
+            } -TimeoutSeconds 10
+        }
+        finally {
+            [Console]::InputEncoding = $originalInputEncoding
+        }
 
         $response.Status | Should -Be 'Succeeded'
         $response.Output.echoed | Should -Be $value
