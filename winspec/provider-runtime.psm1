@@ -401,8 +401,10 @@ function Invoke-ExternalProvider {
         $start = New-Object Diagnostics.ProcessStartInfo
         if ($Provider.EntryPointType -eq 'PowerShell') {
             $start.FileName = Get-CurrentPowerShellPath
+            $providerHost = Join-Path $PSScriptRoot 'provider-host.ps1'
             $start.Arguments = @(
-                '-NoProfile', '-NonInteractive', '-File', $Provider.EntryPoint
+                '-NoProfile', '-NonInteractive', '-File', $providerHost,
+                $Provider.EntryPoint
             ) | ForEach-Object {
                 ConvertTo-ProcessArgument ([string]$_)
             }
@@ -418,15 +420,21 @@ function Invoke-ExternalProvider {
         $start.RedirectStandardInput = $true
         $start.RedirectStandardOutput = $true
         $start.RedirectStandardError = $true
-        $start.StandardOutputEncoding = New-Object Text.UTF8Encoding($false)
-        $start.StandardErrorEncoding = New-Object Text.UTF8Encoding($false)
+        $utf8 = New-Object Text.UTF8Encoding($false)
+        $start.StandardOutputEncoding = $utf8
+        $start.StandardErrorEncoding = $utf8
 
         $process = New-Object Diagnostics.Process
         $process.StartInfo = $start
         if (-not $process.Start()) {
             throw "ProviderStartFailed: '$($Provider.Name)'"
         }
-        $process.StandardInput.Write($requestJson)
+        # StreamWriter differs across Windows PowerShell hosts and can prepend a
+        # BOM. The provider protocol is explicitly BOM-free UTF-8.
+        $requestBytes = $utf8.GetBytes($requestJson)
+        $process.StandardInput.BaseStream.Write(
+            $requestBytes, 0, $requestBytes.Length)
+        $process.StandardInput.BaseStream.Flush()
         $process.StandardInput.Close()
         $receiveParameters = @{
             Process = $process
@@ -455,6 +463,11 @@ function Invoke-ExternalProvider {
             $_.Exception.Message
         }
         $response = ConvertTo-WinSpecHashtable $rawResponse
+        if ($null -eq $response) {
+            throw "InvalidProviderResponse: '$($Provider.Name)' returned " +
+            "empty or JSON null output (stdout chars: $($stdout.Length); " +
+            "stderr chars: $($stderr.Length))"
+        }
         $responseFields = @(
             'protocolVersion', 'requestId', 'status', 'output', 'diagnostics')
         foreach ($field in $response.Keys) {
@@ -469,9 +482,13 @@ function Invoke-ExternalProvider {
                 throw "InvalidProviderResponse: missing '$required'"
             }
         }
-        if ($response.protocolVersion -ne $Script:ProtocolVersion -or
-            $response.requestId -cne $requestId) {
-            throw 'InvalidProviderResponse: protocol or request mismatch'
+        if ($response.protocolVersion -ne $Script:ProtocolVersion) {
+            throw "InvalidProviderResponse: protocol mismatch; expected " +
+            "'$($Script:ProtocolVersion)', received '$($response.protocolVersion)'"
+        }
+        if ($response.requestId -cne $requestId) {
+            throw "InvalidProviderResponse: request mismatch; expected " +
+            "'$requestId', received '$($response.requestId)'"
         }
         if ($response.output -isnot [Collections.IDictionary]) {
             throw 'InvalidProviderResponse: output must be an object'

@@ -411,13 +411,15 @@ $request = [Console]::In.ReadToEnd() | ConvertFrom-Json
             '"script":"provider.ps1","operations":["capture","compare","apply"]}')
         $provider = Get-ProviderCatalog -ProviderPath $root | Where-Object Name -EQ 'Echo'
 
+        $value = -join @(
+            [char]0x4f60, [char]0x597d, [char]0x20, [char]0x220e)
         $response = Invoke-ExternalProvider -Provider $provider -Operation capture -Input @{
-            configuration = @{ value = 'hello' }
+            configuration = @{ value = $value }
             arguments = @()
         } -TimeoutSeconds 10
 
         $response.Status | Should -Be 'Succeeded'
-        $response.Output.echoed | Should -Be 'hello'
+        $response.Output.echoed | Should -Be $value
     }
 
     It 'times out without interpreting partial output as success' {
