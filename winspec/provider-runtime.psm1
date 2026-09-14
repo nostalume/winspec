@@ -448,6 +448,12 @@ function Invoke-ExternalProvider {
         $streams = Receive-BoundedProcessOutput @receiveParameters
         $stdout = $streams.Stdout
         $stderr = $streams.Stderr
+        $stderrSummary = if ([string]::IsNullOrWhiteSpace($stderr)) {
+            '<empty>'
+        }
+        else {
+            $stderr.Substring(0, [Math]::Min(2048, $stderr.Length)).Trim()
+        }
         if ($streams.StdoutTruncated) {
             throw "ProviderResponseTooLarge: '$($Provider.Name)'"
         }
@@ -466,7 +472,7 @@ function Invoke-ExternalProvider {
         if ($null -eq $response) {
             throw "InvalidProviderResponse: '$($Provider.Name)' returned " +
             "empty or JSON null output (stdout chars: $($stdout.Length); " +
-            "stderr chars: $($stderr.Length))"
+            "stderr chars: $($stderr.Length)); stderr: $stderrSummary"
         }
         $responseFields = @(
             'protocolVersion', 'requestId', 'status', 'output', 'diagnostics')
@@ -488,7 +494,8 @@ function Invoke-ExternalProvider {
         }
         if ($response.requestId -cne $requestId) {
             throw "InvalidProviderResponse: request mismatch; expected " +
-            "'$requestId', received '$($response.requestId)'"
+            "'$requestId', received '$($response.requestId)'; stderr: " +
+            $stderrSummary
         }
         if ($response.output -isnot [Collections.IDictionary]) {
             throw 'InvalidProviderResponse: output must be an object'
