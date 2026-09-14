@@ -62,7 +62,7 @@ jobs:
         path: ./test-results.xml
 
     - name: Publish test results
-      uses: dorny/test-reporter@1cc81a5edf733718d4850df304aaa21c05cd7280 # v3
+      uses: dorny/test-reporter@a43b3a5f7366b97d083190328d2c652e1a8b6aa2 # v3
       if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
       with:
         name: Test Results (${{ matrix.shell }})
