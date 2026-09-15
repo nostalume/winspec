@@ -13,6 +13,19 @@ $spec = '.\config\workstation.winspec.psd1'
 & $winspec validate $spec
 ```
 
+Default validation is structural and does not start packaged provider code. Its
+`results.validation.subjects` show provider-owned configurations as `NotRun`.
+When you explicitly trust the configured Action providers and want their semantic
+preview checks, use:
+
+```powershell
+& $winspec validate $spec -PreviewActions -Json
+```
+
+This may start provider code and perform observations, but a conforming preview
+does not modify target or durable state. External State configurations remain
+unexecuted because protocol version 1 has no State validation operation.
+
 For routine use, place exactly one default spec at:
 
 ```text
@@ -234,8 +247,26 @@ rollback, or Action execution inside `apply`.
 ## Use bundled Actions
 
 Bundled packages appear in `winspec providers` without installation. Discovery
-does not execute them. Naming one in `Actions` is still inert until `run` or a
-Workflow step selects that Action.
+does not execute them. The catalog and configured instances are different views:
+
+```powershell
+& $winspec providers -Json       # discovered implementations
+& $winspec actions $spec -Json   # named Actions in this spec
+```
+
+For a one-off provider that accepts empty configuration, run an ephemeral Action
+without editing a spec:
+
+```powershell
+& $winspec run -Provider MicrosoftActivation -DryRun -- /HWID
+& $winspec run -Provider WindowsDebloat -DryRun -- -RunDefaultsLite -Silent
+```
+
+`-Provider` is singular and belongs only to direct `run`; plural `-Providers`
+selects declarative State providers. Direct provider execution sends an empty
+`With` map and any literal values after `--`. When options must live in `With`,
+when the operation is reusable, or when a Workflow references it, define a named
+Action:
 
 ```powershell
 activate = @{
@@ -259,6 +290,9 @@ upstream effects:
 & $winspec run activate -Spec $spec -DryRun -Json
 & $winspec run cacheOffice -Spec $spec -DryRun -Json
 ```
+
+The explicit Office `Path` matters: when it is omitted, OfficeDeployment uses the
+owning spec directory rather than creating a dedicated cache directory.
 
 Read [Bundled Action providers](bundled-providers.md) for the exact fields,
 endpoints, argument order, interaction, privileges, download bounds, trust
@@ -300,7 +334,9 @@ provider failure, not malformed JSON.
 | --- | --- |
 | `UnsupportedSpecFormat: '.ps1'` | Rename only after making the content data-only; move commands/functions into Script Actions. |
 | `AmbiguousDefaultSpec` | Keep only one default PSD1 or JSON file, or pass a path explicitly. |
-| `UnknownAction` / `UnknownProvider` | Check names with `winspec providers -Json` and validate the owning spec. |
+| `UnknownAction` | Use `winspec actions [spec] -Json` to inspect configured names, then validate the owning spec. |
+| `UnknownProvider` | Use `winspec providers -Json` (plus the same `-ProviderPath`, if any) to inspect discovered implementations. |
+| `ProviderValidationUnavailable` from an older WinSpec | Version 0.6.0 emitted one warning for every packaged Action. Current `validate` reports coverage in `results.validation`; use `-PreviewActions` when explicit provider execution is wanted. |
 | `UnknownConfigurationField` | Remove a retired or misspelled provider field; the provider-author or bundled-provider guide owns its schema. |
 | `InsecureRemoteScript` | Change the source to HTTPS, or supply an independently obtained SHA-256 for HTTP. |
 | `InteractiveOutputConflict` | Remove `-Json`/`-DryRun`, or make the script noninteractive. |
@@ -311,3 +347,7 @@ provider failure, not malformed JSON.
 
 When diagnosing automation, repeat with `-Json`, retain stderr separately, and
 inspect `diagnostics[].code` before matching free-form messages.
+
+Run `winspec help` for the command inventory. `winspec help <command>` and
+`winspec <command> -Help` show that command's selection forms, effects, default,
+and a minimal example without loading configuration or discovering providers.

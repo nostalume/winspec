@@ -26,6 +26,35 @@ executable-config loader, legacy provider importer, or automatic translation.
 Stale input fails with an admission diagnostic. This is intentional: silently
 guessing old command or field meaning would hide effects.
 
+## Inspect providers and Actions after migration
+
+Discovery and configuration are separate. `providers` lists installed provider
+implementations without loading a spec, while `actions [spec]` lists the named
+Action bindings in one data-only spec:
+
+```powershell
+winspec providers -Json
+winspec actions .\machine.winspec.psd1 -Json
+```
+
+A reusable Action belongs under `Actions.<name>` and runs as `winspec run
+<name>`. A one-off packaged Action provider can instead be selected directly:
+
+```powershell
+winspec run -Provider MicrosoftActivation -DryRun -- /HWID
+```
+
+Direct selection creates an ephemeral Action with empty `With`; arguments after
+`--` are passed to the provider. It does not restore the removed `trigger`
+command or legacy trigger discovery.
+
+`validate` is structural and inert. Older releases emitted
+`ProviderValidationUnavailable` for configured external Actions; current releases
+report coverage under `results.validation.subjects`. Use `validate
+-PreviewActions` only when starting trusted Action providers for preview is an
+intended effect. External State providers remain `NotRun` because previewing an
+Action cannot validate State convergence semantics.
+
 ## Convert an executable spec
 
 A literal hashtable can often move to `.winspec.psd1` after adding

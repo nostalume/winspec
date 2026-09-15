@@ -105,9 +105,6 @@ function Test-WinSpecSchema {
             if ($provider.Count -ne 1) {
                 $errors += "UnknownSpecificationKey: '$key'"
             }
-            else {
-                $warnings += "ProviderValidationUnavailable: '$key'"
-            }
         }
     }
 
@@ -272,9 +269,6 @@ function Test-WinSpecSchema {
                         $with.Interactive) {
                         $errors += "InteractiveRemoteScript: '$name'"
                     }
-                }
-                else {
-                    $warnings += "ProviderValidationUnavailable: action '$name'"
                 }
             }
         }

@@ -72,6 +72,19 @@ Focused suites:
   fake package executables.
 - `Integration.Tests.ps1`: external State routing through disposable packages.
 
+Every command or protocol change must exercise the public executable in fresh
+Windows PowerShell 5.1 and PowerShell 7 processes. Capture stdout and stderr as
+separate streams. For `-Json`, parse stdout and assert it contains exactly one
+JSON document; diagnostics belong on stderr and must not corrupt that document.
+For human output, assert the complete diagnostic line so a code such as
+`InvalidRegistryValue` cannot accidentally be rendered twice.
+
+Catalog/configuration changes must test both projections: `providers` remains a
+static implementation inventory when no spec configures a provider, and
+`actions [spec]` remains a static list of configured Action names. Direct
+`run -Provider` tests must cover preview, execution, invalid kind, process
+failure, and timeout without contacting a real upstream.
+
 ## Effect policy for tests
 
 Tests must never contact the real activation, debloat, Office, or other upstream

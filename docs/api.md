@@ -12,14 +12,16 @@ document names their command, data, package, or wire behavior.
 ```text
 winspec capture [output] [-Providers names] [-ProviderPath roots] [-Force] [-Json]
 winspec status [spec] [-Providers names] [-ProviderPath roots] [-Json]
-winspec validate [spec] [-ProviderPath roots] [-Json]
+winspec validate [spec] [-ProviderPath roots] [-PreviewActions] [-Json]
 winspec diff [spec] [-Against spec] [-Providers names] [-ProviderPath roots] [-Json]
 winspec apply [spec] [-Providers names] [-ProviderPath roots] [-DryRun] [-Checkpoint] [-Json]
 winspec run <name> [-Spec spec] [options] [-- arguments]
+winspec run -Provider name [-ProviderPath roots] [-DryRun] [-Json] [-- arguments]
 winspec run <path|http(s)-uri> [-Interactive] [-Sha256 hex] [options] [-- arguments]
 winspec workflow <name> [-Spec spec] [-DryRun] [-Json]
 winspec merge <base> <incoming> [-Output path] [-Strategy auto|union|ours|theirs] [-Force]
 winspec providers [-ProviderPath roots] [-Json]
+winspec actions [spec] [-ProviderPath roots] [-Json]
 winspec sandbox [-Enter|-Exit|-List] [-Mode Mock|DryRun] [-Snapshot name]
 winspec rollback (-Last|-SequenceNumber n) [-DryRun]
 winspec help [command]
@@ -40,23 +42,31 @@ of the JSON document.
 | --- | --- | --- |
 | `capture` | optional output; default user `.winspec.psd1` | `-Providers`; `-ProviderPath`; without names, observes core State; existing output needs `-Force` |
 | `status` | optional spec | `-Providers`; `-ProviderPath`; defaults to spec sections, or core State without a spec |
-| `validate` | optional spec | `-ProviderPath`; validates the common external envelope |
+| `validate` | optional spec | `-ProviderPath`; structural by default; `-PreviewActions` explicitly starts preview-capable configured Action providers |
 | `diff` | optional desired spec | `-Against`; `-Providers`; `-ProviderPath`; otherwise compares with the machine |
 | `apply` | optional desired spec | `-Providers`; `-ProviderPath`; `-DryRun`; `-Checkpoint` |
-| `run` | exactly one Action name, local path, or HTTP(S) URI | name uses `-Spec`; local may use `-Interactive`; remote may use `-Sha256`; accepts `--` |
+| `run` | exactly one Action name, `-Provider` name, local path, or HTTP(S) URI | configured name uses `-Spec`; direct provider uses empty `With`; local may use `-Interactive`; remote may use `-Sha256`; accepts `--` |
 | `workflow` | exactly one Workflow name | optional `-Spec`; `-DryRun` |
 | `merge` | base and incoming specs | `-Output` defaults to stdout; strategy defaults `auto`; existing output needs `-Force` |
 | `providers` | no operand | `-ProviderPath` adds discovery roots |
+| `actions` | optional spec | `-ProviderPath`; lists configured Action bindings without returning `With` or executing providers |
 | `sandbox` | no operand | exactly one of `-Enter`, `-Exit`, `-List`; mode defaults `Mock`; snapshot defaults `default` |
 | `rollback` | no operand | exactly one of `-Last` or positive `-SequenceNumber`; optional `-DryRun` |
 
-`-Spec` is valid only for a named Action or Workflow. `-Sha256` is valid only for
+`-Spec` is valid only for a named Action or Workflow. Singular `-Provider` is
+valid only for direct provider execution through `run`; plural `-Providers`
+selects State providers on State commands. `-Sha256` is valid only for
 a direct remote Script; a named remote Script stores it in `With`. `-Interactive`
 is valid only for a direct local Script; a named local Script stores it in
 `With`. `-Providers` applies only to State commands. `-ProviderPath` applies to
-`capture`, `status`, `validate`, `diff`, `apply`, `run`, `workflow`, and
-`providers`. `-Checkpoint` applies only to `apply`; a Workflow stores its
+`capture`, `status`, `validate`, `diff`, `apply`, `run`, `workflow`, `providers`,
+and `actions`. `-Checkpoint` applies only to `apply`; a Workflow stores its
 checkpoint request in the spec.
+
+`run -Provider` cannot be combined with a positional target, `-Spec`,
+`-Interactive`, or `-Sha256`. It accepts only an Action provider. A provider name
+is never inferred from the positional Action namespace, so a configured Action
+may safely have the same name as a provider.
 
 An omitted spec resolves to
 `%USERPROFILE%\.config\winspec\.winspec.psd1`, then `.winspec.json`. If both
@@ -108,6 +118,10 @@ to their selected package.
 
 ## Action schema
 
+A provider is a discovered implementation. A configured Action is a durable,
+named use of one provider. `providers` lists implementations; `actions` lists the
+configured instances in a spec. Both operations are static and inert.
+
 Every named Action uses one common envelope:
 
 ```powershell
@@ -123,6 +137,58 @@ Actions = @{
 `With` is an optional map and defaults empty. No flat provider fields are valid.
 For an external provider, WinSpec forwards `With` unchanged as
 `input.configuration`; the provider package owns its field meanings.
+
+For a one-off invocation whose provider accepts empty configuration, use:
+
+```powershell
+winspec run -Provider MicrosoftActivation -DryRun -- /HWID
+```
+
+This constructs an ephemeral `{ Use = 'MicrosoftActivation'; With = @{} }`
+Action. Values after `--` become `input.arguments`. The current directory becomes
+the Action working directory. Providers with required or reusable configuration
+use a named Action instead; WinSpec does not define an inline nested `With`
+syntax.
+
+`actions [spec]` returns items sorted case-insensitively by Action name. Each item
+contains `name`, `provider`, `origin`, and `operations`; it intentionally omits
+the provider-owned `With` map.
+
+### Validation coverage
+
+Default `validate` is structural and never starts provider code. It preserves
+`results.valid` and reports configurations whose provider-owned semantics were
+not executed:
+
+```json
+{
+  "valid": true,
+  "validation": {
+    "mode": "Structural",
+    "subjects": [
+      {
+        "path": "Actions.cacheOffice",
+        "provider": "OfficeDeployment",
+        "status": "NotRun"
+      }
+    ]
+  }
+}
+```
+
+`-PreviewActions` changes `mode` to `ActionPreview` and selects configured Action
+providers that declare `preview`, in case-insensitive Action-name order. A
+successful `Planned` response maps to `Valid`; a provider response of `Failed`
+maps to `Invalid`, makes `valid` false, and exits 2. A provider without preview is
+`Unavailable` and is not started. A provider process/protocol failure or timeout
+fails the command with exit 3 or 4 and preserves the subject and diagnostic.
+
+The complete subject vocabulary is `NotRun`, `Valid`, `Unavailable`, and
+`Invalid`. External State configuration remains `NotRun`; protocol version 1 has
+no State validation operation. `-PreviewActions` starts trusted provider code and
+may perform observations allowed by the preview contract. A conforming preview
+does not mutate target or durable state, but process isolation is not a security
+sandbox.
 
 ### Core Script Action
 
@@ -235,6 +301,23 @@ command boundary. Provider diagnostics contain `code` and `message` and are
 nested in that provider result. Status vocabulary is `Succeeded`, `Unchanged`,
 `Different`, `Planned`, `Skipped`, and `Failed`.
 
+Human diagnostics render their code once. If a message already begins with its
+same `code:` prefix, WinSpec does not prepend it again. JSON preserves the
+separate provider/command `code` and `message` values.
+
+A direct provider run returns its selection and nested provider result:
+
+```json
+{
+  "actions": [
+    {
+      "provider": "MicrosoftActivation",
+      "result": { "status": "Planned" }
+    }
+  ]
+}
+```
+
 | Exit | Meaning |
 | ---: | --- |
 | 0 | Successful operation, unchanged State, or successful plan |
@@ -253,9 +336,18 @@ State examples—is
 [Building WinSpec providers](provider-development.md).
 
 Public `validate` checks the common Action/State envelope without starting
-provider code. It reports `ProviderValidationUnavailable` where provider-owned
-semantic validation cannot run through Action preview. Process isolation contains
-WinSpec process and wire failures; it is not a security sandbox.
+provider code and reports that coverage in `results.validation`. Explicit
+`-PreviewActions` invokes configured Action previews; it does not validate
+external State semantics. Process isolation contains WinSpec process and wire
+failures; it is not a security sandbox.
+
+## Command Help
+
+`winspec help` lists every command with a one-line purpose. Both
+`winspec help <command>` and `winspec <command> -Help` show the command purpose,
+all supported selection forms, effects, default selection rule, a minimal
+example, and documentation pointers. Help performs no spec load, provider
+discovery, or provider execution.
 
 ## Bundled Action providers
 

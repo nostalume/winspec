@@ -39,7 +39,11 @@ Set-Content -LiteralPath $request.input.configuration.sentinel -Value $request.o
         $result = Invoke-WinSpecIntegration @('validate', $script:Spec, '-ProviderPath', $script:ProviderRoot, '-Json')
         $result.ExitCode | Should -Be 0
         Test-Path -LiteralPath $script:Sentinel | Should -BeFalse
-        ($result.Text | ConvertFrom-Json).diagnostics.code | Should -Contain 'ProviderValidationUnavailable'
+        $document = $result.Text | ConvertFrom-Json
+        $document.results.validation.mode | Should -Be 'Structural'
+        $document.results.validation.subjects[0].path | Should -Be 'Acme'
+        $document.results.validation.subjects[0].status | Should -Be 'NotRun'
+        @($document.diagnostics).Count | Should -Be 0
     }
 
 

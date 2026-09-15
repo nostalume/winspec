@@ -91,6 +91,10 @@ winspec providers -ProviderPath .\my-providers -Json
 The result identifies each provider's `name`, `kind`, `protocolVersion`,
 `operations`, `entryPointType`, and `origin`.
 
+Discovery is not configuration. After a spec names the provider through
+`Actions.<name>.Use`, `winspec actions <spec> -ProviderPath .\my-providers`
+lists that durable binding without executing the entrypoint.
+
 ## Manifest schema
 
 An Action provider with semantic preview uses:
@@ -365,6 +369,32 @@ winspec run greet -Spec .\demo.winspec.psd1 `
     -ProviderPath .\my-providers -Json
 ```
 
+Because this example provider has a useful empty configuration, it can also be
+invoked as an ephemeral Action:
+
+```powershell
+winspec run -Provider AcmeAction -ProviderPath .\my-providers -DryRun
+winspec run -Provider AcmeAction -ProviderPath .\my-providers -- from-cli
+```
+
+The direct form sends an empty `configuration` object and forwards values after
+`--` as `arguments`. It is not an alternate provider protocol. Providers that
+require structured `With` data should direct users to a named Action; WinSpec does
+not define inline nested provider configuration on the command line.
+
+Default `validate` keeps the entrypoint inert and reports configured packaged
+Actions as `NotRun` under `results.validation`. Provider authors can test their
+`preview` admission through explicit Action validation:
+
+```powershell
+winspec validate .\demo.winspec.psd1 -ProviderPath .\my-providers `
+    -PreviewActions -Json
+```
+
+This starts trusted provider code. A conforming preview may observe dependencies
+but must not mutate target or durable state. Missing `preview` is reported as
+`Unavailable`; it is never translated into `run`.
+
 ## Minimal State provider
 
 A State provider manifest changes `kind` and operations:
@@ -488,8 +518,10 @@ and provider explicitly while developing it. Outside development, a same-named
 root section selects the State provider automatically when `-Providers` is
 omitted. Merely installing or discovering the package never selects it.
 `validate` admits only the common external State envelope without starting
-provider code; semantic configuration errors therefore surface when the provider
-is selected for an operation.
+provider code and reports its subject as `NotRun`. `-PreviewActions` does not
+change that State result because protocol version 1 has no State validation
+operation. Semantic State configuration errors therefore surface when the State
+provider is selected for an operation.
 
 ```powershell
 winspec status .\state.winspec.psd1 -Providers FileContent `

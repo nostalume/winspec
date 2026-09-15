@@ -24,6 +24,10 @@ The source checkout can be invoked directly:
 
 If installed through Scoop, use `winspec` in the examples instead.
 
+`winspec help` introduces every command. Use `winspec help run` or
+`winspec run -Help` for a command's selection forms, effects, default, and minimal
+example.
+
 ## PSD1 or JSON?
 
 Use PSD1 for a hand-maintained spec: it supports comments and PowerShell's
@@ -85,6 +89,7 @@ Use the safety ladder before changing the machine:
 ```powershell
 $spec = '.\demo\machine.winspec.psd1'
 .\winspec\winspec.ps1 validate $spec
+.\winspec\winspec.ps1 actions $spec
 .\winspec\winspec.ps1 status $spec -Providers Registry
 .\winspec\winspec.ps1 diff $spec -Providers Registry
 .\winspec\winspec.ps1 apply $spec -Providers Registry -DryRun
@@ -93,7 +98,11 @@ $spec = '.\demo\machine.winspec.psd1'
 .\winspec\winspec.ps1 workflow setup -Spec $spec -DryRun
 ```
 
-`validate` admits the complete data shape. `status` observes selected State.
+`validate` admits the common and core data shape without starting packaged
+providers; its result reports provider-validation coverage. Add
+`-PreviewActions` only when configured Action providers should execute their
+non-mutating preview operation. `actions` lists the spec's named Action instances
+without running them. `status` observes selected State.
 `diff` exits 1 when desired and observed State differ. `apply -DryRun` computes a
 plan without changing State; `apply` converges State but never runs Actions.
 `run` executes exactly one Action. `workflow` is the only surface that sequences
@@ -128,6 +137,17 @@ arrived, but that is audit identity after download—not pre-execution
 verification. Those bootstraps can fetch additional content outside WinSpec's
 byte-level receipt. Review the
 [bundled-provider guide](docs/bundled-providers.md) before use.
+
+`winspec providers` lists discovered implementations; `winspec actions [spec]`
+lists configured Action instances. A provider with useful empty configuration can
+also be selected once without editing a spec:
+
+```powershell
+winspec run -Provider MicrosoftActivation -DryRun -- /HWID
+```
+
+This is an ephemeral Action with empty `With`. Reusable/provider-configured and
+Workflow operations continue to use a named `{ Use, With }` Action.
 
 An external provider package is for advanced integrations that need their own
 validation, lifecycle, or child interaction. Ordinary custom scripts do not need

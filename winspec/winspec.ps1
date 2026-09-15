@@ -4,6 +4,7 @@ $Command = 'help'
 $Target = $null
 $Second = $null
 $SpecPath = $null
+$Provider = $null
 $Providers = @()
 $ProviderPath = @()
 $Against = $null
@@ -24,6 +25,7 @@ $Snapshot = 'default'
 $Last = $false
 $SequenceNumber = 0
 $Help = $false
+$PreviewActions = $false
 $RemainingArguments = @()
 
 try {
@@ -48,13 +50,13 @@ try {
             if ($option -in @(
                     '-force', '-json', '-dryrun', '-checkpoint',
                     '-interactive', '-enter', '-exit',
-                    '-list', '-last', '-help')) {
+                    '-list', '-last', '-help', '-previewactions')) {
                 Set-Variable -Name ($option.TrimStart('-')) -Value $true
                 $index++
                 continue
             }
             if ($option -in @(
-                    '-spec', '-providers', '-providerpath', '-against',
+                    '-spec', '-provider', '-providers', '-providerpath', '-against',
                     '-output', '-strategy', '-sha256', '-timeoutseconds',
                     '-mode', '-snapshot', '-sequencenumber')) {
                 if ($index + 1 -ge $raw.Count) {
@@ -63,6 +65,7 @@ try {
                 $value = $raw[$index + 1]
                 switch ($option) {
                     '-spec' { $SpecPath = [string]$value }
+                    '-provider' { $Provider = [string]$value }
                     '-providers' { $Providers += @([string]$value -split ',') }
                     '-providerpath' { $ProviderPath += @([string]$value -split ',') }
                     '-against' { $Against = [string]$value }
@@ -122,52 +125,148 @@ catch {
     exit 2
 }
 
-$Script:Commands = @(
-    'capture', 'status', 'validate', 'diff', 'apply', 'run', 'workflow',
-    'merge', 'providers', 'sandbox', 'rollback', 'help')
+$Script:CommandHelp = [ordered]@{
+    capture = @{
+        Purpose = 'Observe selected State and publish it as a data-only specification.'
+        Usage = @('winspec capture [output] [-Providers names] [-ProviderPath roots] [-Force] [-Json]')
+        Effects = 'Reads machine State and writes one specification; it never applies State or runs Actions.'
+        Default = 'Observes core State and writes the user .winspec.psd1 path.'
+        Example = 'winspec capture .\observed.winspec.psd1 -Providers Registry'
+    }
+    status = @{
+        Purpose = 'Observe selected State without publishing or changing it.'
+        Usage = @('winspec status [spec] [-Providers names] [-ProviderPath roots] [-Json]')
+        Effects = 'Reads machine State only.'
+        Default = 'Uses State sections in a spec, or core State when no spec is supplied.'
+        Example = 'winspec status .\machine.winspec.psd1 -Providers Registry'
+    }
+    validate = @{
+        Purpose = 'Check a specification and report provider-validation coverage.'
+        Usage = @('winspec validate [spec] [-ProviderPath roots] [-PreviewActions] [-Json]')
+        Effects = 'Structural mode reads data only; -PreviewActions starts trusted Action-provider previews.'
+        Default = 'Uses the default spec and performs structural validation without provider execution.'
+        Example = 'winspec validate .\machine.winspec.psd1 -PreviewActions'
+    }
+    diff = @{
+        Purpose = 'Compare declarative State only; Actions are never part of a diff.'
+        Usage = @('winspec diff [spec] [-Against spec] [-Providers names] [-ProviderPath roots] [-Json]')
+        Effects = 'Reads State and returns Different with exit 1; it never changes the machine.'
+        Default = 'Compares the selected/default spec with current machine State.'
+        Example = 'winspec diff .\machine.winspec.psd1 -Providers Registry'
+    }
+    apply = @{
+        Purpose = 'Converge selected declarative State without running Actions.'
+        Usage = @('winspec apply [spec] [-Providers names] [-ProviderPath roots] [-DryRun] [-Checkpoint] [-Json]')
+        Effects = 'May change selected machine State; -DryRun only observes and compares.'
+        Default = 'Uses State sections in the selected/default spec.'
+        Example = 'winspec apply .\machine.winspec.psd1 -DryRun'
+    }
+    run = @{
+        Purpose = 'Execute or preview exactly one named, direct-provider, or Script Action.'
+        Usage = @(
+            'winspec run <name> [-Spec spec] [-DryRun] [-Json] [-- arguments]',
+            'winspec run -Provider name [-ProviderPath roots] [-DryRun] [-Json] [-- arguments]',
+            'winspec run <path|uri> [-Interactive] [-Sha256 hex] [-DryRun] [-Json] [-- arguments]')
+        Effects = 'May execute provider or script code; -DryRun uses preview or returns an opaque plan.'
+        Default = 'A name selects a configured Action; -Provider selects an ephemeral empty configuration.'
+        Example = 'winspec run -Provider MicrosoftActivation -DryRun -- /HWID'
+    }
+    workflow = @{
+        Purpose = 'Execute or preview one configured ordered multi-step Workflow.'
+        Usage = @('winspec workflow <name> [-Spec spec] [-DryRun] [-Json]')
+        Effects = 'May apply State, run Actions, and publish captures in declared order.'
+        Default = 'Uses the named Workflow in the selected/default spec.'
+        Example = 'winspec workflow setup -Spec .\machine.winspec.psd1 -DryRun'
+    }
+    merge = @{
+        Purpose = 'Combine two data-only specifications without touching machine State.'
+        Usage = @('winspec merge <base> <incoming> [-Output path] [-Strategy auto|union|ours|theirs] [-Force]')
+        Effects = 'Reads two specs and optionally writes one merged spec.'
+        Default = 'Uses auto strategy and writes the merged data to stdout.'
+        Example = 'winspec merge .\base.psd1 .\incoming.psd1 -Output .\merged.psd1'
+    }
+    providers = @{
+        Purpose = 'List discovered provider implementations without reading configured Actions.'
+        Usage = @('winspec providers [-ProviderPath roots] [-Json]')
+        Effects = 'Reads static manifests only and never starts a provider.'
+        Default = 'Includes core, bundled, user, and explicitly rooted providers.'
+        Example = 'winspec providers -Json'
+    }
+    actions = @{
+        Purpose = 'List configured Action instances and their provider bindings.'
+        Usage = @('winspec actions [spec] [-ProviderPath roots] [-Json]')
+        Effects = 'Reads and validates a spec; it never starts or runs an Action provider.'
+        Default = 'Uses the default spec and returns an empty list when it has no Actions.'
+        Example = 'winspec actions .\machine.winspec.psd1 -Json'
+    }
+    sandbox = @{
+        Purpose = 'Inspect or change the local WinSpec sandbox context.'
+        Usage = @('winspec sandbox [-Enter|-Exit|-List] [-Mode Mock|DryRun] [-Snapshot name]')
+        Effects = 'Changes only local sandbox context files when entering or exiting.'
+        Default = 'Displays the current context when no operation switch is supplied.'
+        Example = 'winspec sandbox -Enter -Mode Mock'
+    }
+    rollback = @{
+        Purpose = 'Preview or request one explicit Windows restore operation.'
+        Usage = @('winspec rollback (-Last|-SequenceNumber n) [-DryRun]')
+        Effects = 'May request Windows System Restore; WinSpec never elevates implicitly.'
+        Default = 'Requires exactly one restore target.'
+        Example = 'winspec rollback -Last -DryRun'
+    }
+    help = @{
+        Purpose = 'Show the command inventory or detailed help for one command.'
+        Usage = @('winspec help [command]', 'winspec <command> -Help')
+        Effects = 'Writes documentation to stdout without loading a spec or provider catalog.'
+        Default = 'Shows the complete command inventory.'
+        Example = 'winspec help run'
+    }
+}
+$Script:Commands = @($Script:CommandHelp.Keys)
 $Command = $Command.ToLowerInvariant()
 
 function Show-Help {
     param([string]$Topic)
-    if (-not $Topic -or $Topic -eq 'help') {
-        @'
+    if (-not $Topic) {
+        $lines = @'
 WinSpec - declarative Windows state and explicit actions
 
-Usage:
-  winspec capture [output] [-Providers name[]] [-ProviderPath directory[]] [-Force] [-Json]
-  winspec status [spec] [-Providers name[]] [-ProviderPath directory[]] [-Json]
-  winspec validate [spec] [-ProviderPath directory[]] [-Json]
-  winspec diff [spec] [-Against spec] [-Providers name[]] [-ProviderPath directory[]] [-Json]
-  winspec apply [spec] [-Providers name[]] [-ProviderPath directory[]] [-DryRun] [-Checkpoint] [-Json]
-  winspec run <name> [-Spec spec] [-DryRun] [-Json] [-- arguments]
-  winspec run <path|uri> [-Interactive] [-Sha256 hex] [-DryRun] [-Json] [-- arguments]
-  winspec workflow <name> [-Spec spec] [-DryRun] [-Json]
-  winspec merge <base> <incoming> [-Output path] [-Strategy auto|union|ours|theirs] [-Force]
-  winspec providers [-ProviderPath directory[]] [-Json]
-  winspec sandbox [-Enter|-Exit|-List] [-Mode Mock|DryRun] [-Snapshot name]
-  winspec rollback (-Last|-SequenceNumber n) [-DryRun]
+State is declarative and converged by apply. An Action is one explicit effect
+executed by run. A Workflow is the only ordered multi-step owner.
 
-Specifications are data-only .psd1 or .json files. Capture observes, apply
-changes state, and run executes exactly one Action. A Workflow is the only
-multi-step execution surface. Provider discovery reads manifests but never runs
-provider code.
+Commands:
 '@
+        $lines += [Environment]::NewLine
+        foreach ($name in $Script:Commands) {
+            $lines += ('  {0} - {1}' -f $name.PadRight(10),
+                $Script:CommandHelp[$name].Purpose) + [Environment]::NewLine
+        }
+        $lines += @'
+
+Run "winspec help <command>" or "winspec <command> -Help" for details.
+Specifications are data-only .psd1 or .json files. Provider discovery reads
+static manifests and never starts provider code.
+'@
+        $lines
         return
     }
-    switch ($Topic) {
-        'capture' { 'WinSpec capture [output] [-Providers name[]] [-ProviderPath directory[]] [-Force] [-Json]' }
-        'status' { 'WinSpec status [spec] [-Providers name[]] [-ProviderPath directory[]] [-Json]' }
-        'validate' { 'WinSpec validate [spec] [-ProviderPath directory[]] [-Json]' }
-        'diff' { 'WinSpec diff [spec] [-Against spec] [-Providers name[]] [-ProviderPath directory[]] [-Json]' }
-        'apply' { 'WinSpec apply [spec] [-Providers name[]] [-ProviderPath directory[]] [-DryRun] [-Checkpoint] [-Json]' }
-        'run' { 'WinSpec run <name> [-Spec spec] | <path|uri> [-Interactive] [-Sha256 hex] [-DryRun] [-Json] [-- arguments]' }
-        'workflow' { 'WinSpec workflow <name> [-Spec spec] [-DryRun] [-Json]' }
-        'merge' { 'WinSpec merge <base> <incoming> [-Output path] [-Strategy auto|union|ours|theirs] [-Force]' }
-        'providers' { 'WinSpec providers [-ProviderPath directory[]] [-Json]' }
-        'sandbox' { 'WinSpec sandbox [-Enter|-Exit|-List] [-Mode Mock|DryRun] [-Snapshot name]' }
-        'rollback' { 'WinSpec rollback (-Last|-SequenceNumber n) [-DryRun]' }
-        default { throw "UnknownCommand: '$Topic'" }
+    if (-not $Script:CommandHelp.Contains($Topic)) {
+        throw "UnknownCommand: '$Topic'"
     }
+    $item = $Script:CommandHelp[$Topic]
+    $usage = @($item.Usage | ForEach-Object { "  $_" }) -join
+    [Environment]::NewLine
+    @"
+WinSpec $Topic
+
+Purpose: $($item.Purpose)
+Usage:
+$usage
+Effects: $($item.Effects)
+Default: $($item.Default)
+Example:
+  $($item.Example)
+See: docs/api.md and docs/usage.md
+"@
 }
 
 if ($Command -notin $Script:Commands) {
@@ -192,7 +291,19 @@ if ($Command -notin $Script:Commands) {
 }
 if ($Help -or $Command -eq 'help') {
     try {
-        Show-Help $(if ($Command -eq 'help') { $Target } else { $Command })
+        $helpTopic = if ($Command -ne 'help') {
+            $Command
+        }
+        elseif ($Target) {
+            $Target
+        }
+        elseif ($Help) {
+            'help'
+        }
+        else {
+            $null
+        }
+        Show-Help $helpTopic
         exit 0
     }
     catch {
@@ -228,8 +339,17 @@ function Write-CommandResult {
             $Result.results | ConvertTo-Json -Depth 12
         }
         foreach ($diagnostic in @($Result.diagnostics)) {
-            [Console]::Error.WriteLine(
-                ("{0}: {1}" -f $diagnostic.code, $diagnostic.message))
+            $code = [string]$diagnostic.code
+            $message = [string]$diagnostic.message
+            $prefix = $code + ':'
+            $line = if ($message.StartsWith(
+                    $prefix, [StringComparison]::OrdinalIgnoreCase)) {
+                $message
+            }
+            else {
+                "${code}: $message"
+            }
+            [Console]::Error.WriteLine($line)
         }
     }
 }
@@ -241,6 +361,54 @@ function Assert-Specification {
         throw 'InvalidSpecification: ' + ($validation.Errors -join '; ')
     }
     return $validation
+}
+
+function Get-ProviderValidationSubjects {
+    param([hashtable]$Spec, [object[]]$Catalog)
+
+    $subjects = @()
+    foreach ($provider in @($Catalog | Where-Object {
+                $_.Execution -eq 'Protocol' -and $_.Kind -eq 'State'
+            })) {
+        if ($Spec.ContainsKey($provider.Name)) {
+            $subjects += [pscustomobject][ordered]@{
+                path = [string]$provider.Name
+                provider = [string]$provider.Name
+                status = 'NotRun'
+            }
+        }
+    }
+    if ($Spec.ContainsKey('Actions') -and $Spec.Actions -is [hashtable]) {
+        foreach ($name in @($Spec.Actions.Keys | Sort-Object)) {
+            $action = $Spec.Actions[$name]
+            if ($action -isnot [hashtable] -or
+                $action.Use -isnot [string]) {
+                continue
+            }
+            $provider = @($Catalog | Where-Object {
+                    $_.Execution -eq 'Protocol' -and
+                    $_.Kind -eq 'Action' -and $_.Name -ieq $action.Use
+                })[0]
+            if ($provider) {
+                $subjects += [pscustomobject][ordered]@{
+                    path = "Actions.$name"
+                    provider = [string]$provider.Name
+                    status = 'NotRun'
+                }
+            }
+        }
+    }
+    return @($subjects | Sort-Object path)
+}
+
+function Get-CommandFailureExitCode {
+    param([string]$Code)
+
+    if ($Code -match 'Timeout|Cancel') { return 4 }
+    if ($Code -match 'ProviderFailed|ProcessFailed|ScriptStart|Checkpoint|Rollback|OutputExists') {
+        return 3
+    }
+    return 2
 }
 
 function Test-DirectActionTarget {
@@ -260,6 +428,15 @@ try {
     if ($RemainingArguments.Count -gt 0 -and $Command -ne 'run') {
         throw "UnexpectedArguments: '$Command' does not accept -- arguments"
     }
+    if ($Provider -and $Command -ne 'run') {
+        throw "InvalidOption: -Provider is not valid for '$Command'"
+    }
+    if ($PreviewActions -and $Command -ne 'validate') {
+        throw "InvalidOption: -PreviewActions is not valid for '$Command'"
+    }
+    if ($Provider -and ($Target -or $SpecPath -or $Interactive -or $Sha256)) {
+        throw 'InvalidSelection: direct provider execution cannot use a target, -Spec, -Interactive, or -Sha256'
+    }
     if ($SpecPath -and $Command -notin @('run', 'workflow')) {
         throw "InvalidOption: -Spec is not valid for '$Command'"
     }
@@ -275,7 +452,7 @@ try {
     }
     if ($ProviderPath.Count -gt 0 -and $Command -notin @(
             'providers', 'validate', 'capture', 'status', 'diff', 'apply',
-            'run', 'workflow')) {
+            'run', 'workflow', 'actions')) {
         throw "InvalidOption: -ProviderPath is not valid for '$Command'"
     }
     if ($DryRun -and
@@ -311,9 +488,31 @@ try {
                 Operations, EntryPointType, Origin)
             $result = New-CommandResult 'Succeeded' @{ providers = $items }
         }
+        'actions' {
+            $document = Get-SpecDocument -Path $Target
+            $null = Assert-Specification $document.Spec $catalog
+            $items = @()
+            if ($document.Spec.ContainsKey('Actions')) {
+                foreach ($name in @($document.Spec.Actions.Keys | Sort-Object)) {
+                    $action = $document.Spec.Actions[$name]
+                    $selected = @($catalog | Where-Object {
+                            $_.Kind -eq 'Action' -and
+                            $_.Name -ieq $action.Use
+                        })[0]
+                    $items += [pscustomobject][ordered]@{
+                        name = [string]$name
+                        provider = [string]$selected.Name
+                        origin = [string]$selected.Origin
+                        operations = @($selected.Operations)
+                    }
+                }
+            }
+            $result = New-CommandResult 'Succeeded' @{ actions = @($items) }
+        }
         'validate' {
             $path = if ($Target) { $Target } else { $SpecPath }
-            $spec = Get-Spec -Path $path
+            $document = Get-SpecDocument -Path $path
+            $spec = $document.Spec
             $validation = Test-WinSpecSchema -Spec $spec `
                 -ProviderCatalog $catalog
             $diagnostics = @()
@@ -331,11 +530,89 @@ try {
                     message = $message
                 }
             }
-            if ($validation.Valid) {
-                $result = New-CommandResult 'Succeeded' @{ valid = $true } $diagnostics
+            $subjects = @(Get-ProviderValidationSubjects $spec $catalog)
+            $valid = [bool]$validation.Valid
+            $providerExitCode = 0
+            if ($PreviewActions -and $validation.Valid) {
+                Import-Module (Join-Path $root 'actions.psm1') -Force
+                foreach ($subject in @($subjects | Where-Object {
+                            $_.path.StartsWith('Actions.')
+                        })) {
+                    $name = $subject.path.Substring('Actions.'.Length)
+                    $action = $spec.Actions[$name]
+                    $selected = @($catalog | Where-Object {
+                            $_.Kind -eq 'Action' -and
+                            $_.Name -ieq $action.Use
+                        })[0]
+                    if ('preview' -notin @($selected.Operations)) {
+                        $subject.status = 'Unavailable'
+                        continue
+                    }
+                    try {
+                        $preview = Invoke-WinSpecAction -Action $action `
+                            -Provider $selected -DryRun `
+                            -BasePath ([IO.Path]::GetDirectoryName($document.Path)) `
+                            -TimeoutSeconds $TimeoutSeconds
+                    }
+                    catch {
+                        $subject.status = 'Unavailable'
+                        $message = $_.Exception.Message
+                        $code = ($message -split ':')[0]
+                        $diagnostics += @{
+                            severity = 'error'
+                            code = $code
+                            message = $message
+                            subject = $subject.path
+                        }
+                        $valid = $false
+                        $providerExitCode = Get-CommandFailureExitCode $code
+                        break
+                    }
+                    if ($preview.Status -eq 'Failed') {
+                        $subject.status = 'Invalid'
+                        $valid = $false
+                        $previewDiagnostics = @($preview.Diagnostics)
+                        if ($previewDiagnostics.Count -eq 0) {
+                            $previewDiagnostics = @([pscustomobject]@{
+                                    code = 'ProviderValidationFailed'
+                                    message = "Action '$name' was rejected by '$($selected.Name)'"
+                                })
+                        }
+                        foreach ($item in $previewDiagnostics) {
+                            $diagnostics += @{
+                                severity = 'error'
+                                code = [string]$item.code
+                                message = [string]$item.message
+                                subject = $subject.path
+                            }
+                        }
+                    }
+                    else {
+                        $subject.status = 'Valid'
+                    }
+                }
+            }
+            $results = @{
+                valid = $valid
+                validation = [ordered]@{
+                    mode = if ($PreviewActions) {
+                        'ActionPreview'
+                    }
+                    else {
+                        'Structural'
+                    }
+                    subjects = @($subjects)
+                }
+            }
+            if ($providerExitCode -gt 0) {
+                $result = New-CommandResult 'Failed' $results $diagnostics
+                $exitCode = $providerExitCode
+            }
+            elseif ($valid) {
+                $result = New-CommandResult 'Succeeded' $results $diagnostics
             }
             else {
-                $result = New-CommandResult 'Failed' @{ valid = $false } $diagnostics
+                $result = New-CommandResult 'Failed' $results $diagnostics
                 $exitCode = 2
             }
         }
@@ -425,10 +702,37 @@ try {
             }
         }
         'run' {
-            if (-not $Target) { throw 'MissingAction: run requires one target' }
+            if (-not $Target -and -not $Provider) {
+                throw 'MissingAction: run requires one target or -Provider'
+            }
             Import-Module (Join-Path $root 'actions.psm1') -Force
             $forwarded = @($RemainingArguments)
-            if (Test-DirectActionTarget $Target) {
+            if ($Provider) {
+                $matches = @($catalog | Where-Object Name -ieq $Provider)
+                if ($matches.Count -ne 1) {
+                    throw "UnknownProvider: '$Provider'"
+                }
+                $selected = $matches[0]
+                if ($selected.Kind -ne 'Action') {
+                    throw "WrongProviderKind: '$Provider' is not an Action provider"
+                }
+                if ($selected.Name -ieq 'Script') {
+                    throw 'InvalidSelection: direct Script execution requires a path or URI'
+                }
+                $action = @{ Use = $selected.Name; With = @{} }
+                $runValue = Invoke-WinSpecAction -Action $action `
+                    -Provider $selected -BasePath ([IO.Path]::GetFullPath($PWD)) `
+                    -Arguments $forwarded -DryRun:$DryRun `
+                    -TimeoutSeconds $TimeoutSeconds
+                if ($runValue.Status -eq 'Failed') { $exitCode = 3 }
+                $result = New-CommandResult $runValue.Status @{
+                    actions = @([pscustomobject][ordered]@{
+                            provider = [string]$selected.Name
+                            result = $runValue
+                        })
+                }
+            }
+            elseif (Test-DirectActionTarget $Target) {
                 if ($SpecPath) {
                     throw 'InvalidSelection: -Spec is valid only for a named Action'
                 }
@@ -566,15 +870,7 @@ try {
 catch {
     $message = $_.Exception.Message
     $code = ($message -split ':')[0]
-    $exitCode = if ($code -match 'Timeout|Cancel') {
-        4
-    }
-    elseif ($code -match 'ProviderFailed|ProcessFailed|ScriptStart|Checkpoint|Rollback|OutputExists') {
-        3
-    }
-    else {
-        2
-    }
+    $exitCode = Get-CommandFailureExitCode $code
     $result = New-CommandResult 'Failed' @{} @(@{
             severity = 'error'
             code = $code

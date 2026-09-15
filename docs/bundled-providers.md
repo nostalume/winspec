@@ -5,10 +5,17 @@ shipped with WinSpec: `MicrosoftActivation`, `WindowsDebloat`, and
 `OfficeDeployment`.
 
 They are automatically discovered from the bundle but remain inert until a named
-Action is selected by `run` or a Workflow `Run` step. Each is a normal
-protocol-version-1 packaged provider running outside the WinSpec process.
+Action, a direct `run -Provider` call, or a Workflow `Run` step selects one. Each
+is a normal protocol-version-1 packaged provider running outside the WinSpec
+process.
 Bundling changes installation and discovery only; it does not grant extra
 privilege or create a security sandbox.
+
+`winspec providers` lists these implementations. `winspec actions [spec]` lists
+the named instances configured in one spec. A one-off call can select a bundled
+implementation directly with `winspec run -Provider <name>`; this creates an
+ephemeral Action with empty `With`. Reusable or non-default `With` values remain a
+named Action.
 
 ## Shared execution contract
 
@@ -185,10 +192,18 @@ configuration, elevate, retry, or uninstall.
 ## Run and Workflow examples
 
 ```powershell
+winspec run -Provider MicrosoftActivation -DryRun -- /HWID
+winspec run -Provider WindowsDebloat -DryRun -- -RunDefaultsLite -Silent
 winspec run activateWindows -Spec .\machine.winspec.psd1 -DryRun -Json
 winspec run debloat -Spec .\machine.winspec.psd1
 winspec run cacheOffice -Spec .\machine.winspec.psd1 -Json
 ```
+
+Default `validate` reports these named provider configurations as `NotRun`
+without starting them. `validate -PreviewActions` explicitly starts each
+preview-capable configured Action, validates its `With` map without network
+access, and reports `Valid` or `Invalid`. An opaque provider would be
+`Unavailable`; all three maintained bundled providers currently declare preview.
 
 A Workflow can make checkpoint and ordering explicit:
 

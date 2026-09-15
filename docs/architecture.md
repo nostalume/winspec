@@ -3,7 +3,8 @@
 WinSpec separates three domain concepts:
 
 - **State** is observable and convergent: capture, compare, then apply.
-- **Action** is an explicit one-shot effect: run or preview one named operation.
+- **Action** is an explicit one-shot effect: run or preview one configured or
+  ephemeral operation.
 - **Workflow** is the sole owner of ordered multi-step execution.
 
 This separation is public behavior, not directory style. `apply` cannot start an
@@ -29,7 +30,9 @@ CLI grammar and result envelope
 
 `winspec.ps1` owns command parsing, option compatibility, one public result
 document, and process exit. It admits raw CLI data, then delegates one terminal
-operation. It does not contain provider policy.
+operation. It also projects the static catalog as `providers`, projects named
+spec instances as `actions`, and constructs the empty-configuration ephemeral
+Action selected by `run -Provider`. It does not contain provider policy.
 
 `spec.psm1` owns data-only PSD1/JSON admission, Include composition, default path
 resolution, safe serialization, and atomic publication. `schema.psm1` owns the
@@ -108,7 +111,9 @@ the most common extension path readable and debuggable from a normal shell.
 
 ```text
 provider.json --read only--> catalog
-selected operation
+configured Action or explicit run -Provider selection
+  -> admit one { Use, With } Action (direct With is empty)
+  -> select one provider operation
   -> create invocation temp directory
   -> start admitted entrypoint out of process
   -> write one bounded JSON request; close stdin
@@ -124,6 +129,18 @@ configuration semantics, dependencies, protocol validation, resource lifecycle,
 or its own visible child interaction. External providers are fully trusted code
 with the caller's token. The process boundary is fault and protocol isolation,
 not privilege isolation.
+
+Catalog identity and Action identity are intentionally distinct. A provider is
+an installed/discovered implementation; a named Action is durable spec data and
+can be referenced by a Workflow; a direct provider Action lives for one command.
+`providers` and `actions` observe the first two identities without execution.
+Both configured and direct Actions converge at `actions.psm1`, so `run` remains
+the only single-Action effect owner.
+
+Default validation stops before the process boundary and reports packaged
+configuration subjects as `NotRun`. Explicit `-PreviewActions` crosses that
+boundary only for configured Action providers declaring `preview`; it never
+substitutes preview for the absent external State validation operation.
 
 Core providers use the same catalog names, operation vocabulary, and logical
 result laws but not this process envelope. Their catalog protocol version is
