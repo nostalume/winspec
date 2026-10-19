@@ -1,0 +1,45 @@
+{
+  "topic": "rollback",
+  "summary": "Preview or request one explicit Windows restore operation.",
+  "usage": [
+    "winspec rollback (-Last|-SequenceNumber n) [-DryRun]"
+  ],
+  "options": [
+    {
+      "name": "-last",
+      "valueType": "Switch",
+      "repeatable": false
+    },
+    {
+      "name": "-sequencenumber",
+      "valueType": "Integer",
+      "repeatable": false
+    },
+    {
+      "name": "-dryrun",
+      "valueType": "Switch",
+      "repeatable": false
+    },
+    {
+      "name": "-json",
+      "valueType": "Switch",
+      "repeatable": false
+    },
+    {
+      "name": "-help",
+      "valueType": "Switch",
+      "repeatable": false
+    }
+  ],
+  "defaults": {
+    "selection": "Requires exactly one restore target."
+  },
+  "effects": "May request Windows System Restore; WinSpec never elevates implicitly.",
+  "examples": [
+    "winspec rollback -Last -DryRun"
+  ],
+  "related": [
+    "docs/api.md",
+    "docs/usage.md"
+  ]
+}

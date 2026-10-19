@@ -1,0 +1,5 @@
+OK capture -- State specification published
+Output: <OUTPUT>
+Providers: HumanState
+Overwrite permission: allowed (-Force)
+Scope: State snapshot only; Actions and arbitrary user files were not backed up.

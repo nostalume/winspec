@@ -7,7 +7,7 @@ BeforeAll {
     Import-Module (Join-Path $winspecRoot "checkpoint.psm1") -Force -Global
 }
 
-Describe "Checkpoint Safety" {
+Describe "Checkpoint Safety" -Tag 'Unit' {
     Context "New-Checkpoint" {
         It "Should not enable System Restore implicitly" {
             InModuleScope checkpoint {
@@ -55,7 +55,7 @@ Describe "Checkpoint Safety" {
     }
 }
 
-Describe "Rollback Safety" {
+Describe "Rollback Safety" -Tag 'Unit' {
     BeforeEach {
         $script:RestorePoints = @(
             [pscustomobject]@{ SequenceNumber = 10; Description = "Manual Restore"; CreationTime = [datetime]"2026-01-01" },

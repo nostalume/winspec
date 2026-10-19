@@ -1,0 +1,7 @@
+OK actions -- 2 configured Actions
+Spec: <SPEC>
+Name Provider Origin Operations
+broken Script Core run, preview
+hello Script Core run, preview
+Scope: static bindings only; no Action/provider was started.
+Next: winspec run hello -Spec "<SPEC>" -DryRun

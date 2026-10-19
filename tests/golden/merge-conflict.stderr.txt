@@ -1,0 +1,5 @@
+FAIL merge -- 1 unresolved conflict; no file was written
+Strategy: auto
+Path Base Incoming
+Registry.Explorer.ShowHidden true false
+Next: review both inputs and choose an explicit resolution strategy if intended.

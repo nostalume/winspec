@@ -1,0 +1,5 @@
+OK validate -- structural checks passed
+Spec: <EMPTY>
+Mode: Structural
+Provider-owned subjects: 0
+Scope: runtime dependencies and successful execution are not proven.

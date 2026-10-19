@@ -22,10 +22,24 @@ function Test-WorkflowPreflight {
         [Parameter(Mandatory)][object[]]$Catalog,
         [switch]$DryRun,
         [switch]$MachineOutput,
-        [int]$TimeoutSeconds
+        [int]$TimeoutSeconds,
+        [scriptblock]$Progress
     )
     $basePath = [IO.Path]::GetDirectoryName($Document.Path)
     $spec = $Document.Spec
+    # Admit interaction for the entire Workflow before any provider preview.
+    if ($MachineOutput -or $DryRun) {
+        foreach ($step in @($Workflow.Steps)) {
+            if ((Get-WorkflowStepKind $step) -ne 'Run') { continue }
+            $action = $spec.Actions[$step.Run]
+            if ($action.Use -ieq 'Script' -and
+                $action.ContainsKey('With') -and
+                $action.With.ContainsKey('Interactive') -and
+                $action.With.Interactive) {
+                throw "InteractiveWorkflowOutput: action '$($step.Run)' cannot use JSON or DryRun"
+            }
+        }
+    }
     $plans = @()
     $index = 0
     foreach ($step in @($Workflow.Steps)) {
@@ -37,16 +51,9 @@ function Test-WorkflowPreflight {
                 $provider = @($Catalog | Where-Object {
                         $_.Kind -eq 'Action' -and $_.Name -ieq $action.Use
                     })[0]
-                $configuredInteractive = $action.Use -ieq 'Script' -and
-                $action.ContainsKey('With') -and
-                $action.With.ContainsKey('Interactive') -and
-                $action.With.Interactive
-                if ($configuredInteractive -and ($MachineOutput -or $DryRun)) {
-                    throw "InteractiveWorkflowOutput: action '$value' cannot use JSON or DryRun"
-                }
                 $preview = Invoke-WinSpecAction -Action $action -Provider $provider `
                     -BasePath $basePath -DryRun `
-                    -TimeoutSeconds $TimeoutSeconds
+                    -TimeoutSeconds $TimeoutSeconds -Progress $Progress
                 if ($preview.Status -eq 'Failed') {
                     throw "ProviderPreviewFailed: '$value'"
                 }
@@ -69,7 +76,7 @@ function Test-WorkflowPreflight {
                 }
                 $comparison = Compare-WinSpecState -Spec $spec `
                     -Catalog $Catalog -Providers @($selected.Name) `
-                    -TimeoutSeconds $TimeoutSeconds
+                    -TimeoutSeconds $TimeoutSeconds -Progress $Progress
                 $plans += [pscustomobject]@{
                     Index = $index
                     Kind = $kind
@@ -122,7 +129,8 @@ function Invoke-WinSpecWorkflow {
         [Parameter(Mandatory)][object[]]$Catalog,
         [switch]$DryRun,
         [switch]$MachineOutput,
-        [ValidateRange(1, 3600)][int]$TimeoutSeconds = 300
+        [ValidateRange(1, 3600)][int]$TimeoutSeconds = 300,
+        [scriptblock]$Progress
     )
     $spec = $Document.Spec
     if (-not $spec.ContainsKey('Workflows') -or
@@ -132,7 +140,7 @@ function Invoke-WinSpecWorkflow {
     $workflow = $spec.Workflows[$Name]
     $plans = Test-WorkflowPreflight -Document $Document -Workflow $workflow `
         -Catalog $Catalog -DryRun:$DryRun -MachineOutput:$MachineOutput `
-        -TimeoutSeconds $TimeoutSeconds
+        -TimeoutSeconds $TimeoutSeconds -Progress $Progress
     $basePath = [IO.Path]::GetDirectoryName($Document.Path)
     $receipts = @()
     $failed = $false
@@ -176,17 +184,17 @@ function Invoke-WinSpecWorkflow {
                     $action = $spec.Actions[$plan.Name]
                     $value = Invoke-WinSpecAction -Action $action `
                         -Provider $plan.Provider -BasePath $basePath `
-                        -TimeoutSeconds $TimeoutSeconds
+                        -TimeoutSeconds $TimeoutSeconds -Progress $Progress
                 }
                 'Apply' {
                     $value = Invoke-WinSpecStateApply -Spec $spec `
                         -Catalog $Catalog -Providers $plan.Providers `
-                        -TimeoutSeconds $TimeoutSeconds
+                        -TimeoutSeconds $TimeoutSeconds -Progress $Progress
                 }
                 'Capture' {
                     $captured = Get-WinSpecObservedState -Catalog $Catalog `
                         -Spec $spec -Providers $plan.Providers `
-                        -TimeoutSeconds $TimeoutSeconds
+                        -TimeoutSeconds $TimeoutSeconds -Progress $Progress
                     $captured.SchemaVersion = 1
                     Save-Configuration -Config $captured `
                         -Path $plan.OutputPath -Force:$plan.Force | Out-Null
@@ -208,15 +216,16 @@ function Invoke-WinSpecWorkflow {
         }
         catch {
             $failed = $true
+            $diagnostics = @([pscustomobject]@{ Code = ($_.Exception.Message -split ':')[0]; Message = $_.Exception.Message })
+            foreach ($key in @('ProcessCleanupError', 'TemporaryCleanupError', 'RemoteScriptCleanupError', 'DownloadCleanupError')) {
+                if ($_.Exception.Data.Contains($key)) { $diagnostics += [pscustomobject]@{ Code = $key; Message = [string]$_.Exception.Data[$key] } }
+            }
             $receipts += [pscustomobject]@{
                 Index = $plan.Index
                 Kind = $plan.Kind
                 Name = $plan.Name
                 Status = 'Failed'
-                Diagnostics = @([pscustomobject]@{
-                        Code = ($_.Exception.Message -split ':')[0]
-                        Message = $_.Exception.Message
-                    })
+                Diagnostics = $diagnostics
             }
         }
     }

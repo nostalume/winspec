@@ -1,7 +1,6 @@
 # providers/feature.psm1 - Declarative Windows features provider
 
 Import-Module (Join-Path $PSScriptRoot "..\windows.psm1")
-Import-Module (Join-Path $PSScriptRoot "..\sandbox.psm1") -ErrorAction SilentlyContinue
 
 function Get-ProviderInfo {
     return @{
@@ -223,80 +222,6 @@ function Compare-FeatureState {
     return $differences
 }
 
-function Invoke-FeatureSandbox {
-    <#
-    .SYNOPSIS
-        Applies feature state changes in sandbox mode.
-
-    .DESCRIPTION
-        Simulates feature changes in the sandbox context without touching
-        the real system feature configuration.
-
-    .PARAMETER Desired
-        Desired feature state hashtable.
-
-    .OUTPUTS
-        Hashtable with Status and Changed arrays.
-    #>
-
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $true)]
-        [hashtable]$Desired
-    )
-
-    if (-not (Test-SandboxActive)) {
-        throw "Sandbox not active"
-    }
-
-    $providerName = "Feature"
-
-    $results = @{
-        Status = "Success"
-        Changed = @()
-    }
-
-    Update-SandboxState $providerName {
-        param($state)
-
-        if (-not $state) {
-            $state = @{}
-        }
-        foreach ($feature in $Desired.Keys) {
-
-            $currentValue = $state[$feature]
-            $desiredValue = $Desired[$feature]
-
-            if ($currentValue -ne $desiredValue) {
-
-                $results.Changed += @{
-                    Name = $feature
-                    OldValue = $currentValue
-                    NewValue = $desiredValue
-                }
-
-                $state[$feature] = $desiredValue
-            }
-        }
-
-        return $state
-    }
-    # record change in sandbox history
-    Update-SandboxChanges "Feature" "Apply" $results
-
-    return $results
-}
-
-function Invoke-FeatureSandboxApply {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $true)]
-        [hashtable]$Desired
-    )
-
-    return Invoke-FeatureSandbox -Desired $Desired
-}
-
 Export-ModuleMember -Function @(
     "Get-ProviderInfo"
     "Get-FeatureState"
@@ -306,6 +231,4 @@ Export-ModuleMember -Function @(
     "Set-FeatureState"
     "Export-FeatureState"
     "Compare-FeatureState"
-    "Invoke-FeatureSandbox"
-    "Invoke-FeatureSandboxApply"
 )

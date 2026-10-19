@@ -1,0 +1,35 @@
+{
+  "topic": "actions",
+  "summary": "List configured Action instances and their provider bindings.",
+  "usage": [
+    "winspec actions [spec] [-ProviderPath roots] [-Json]"
+  ],
+  "options": [
+    {
+      "name": "-providerpath",
+      "valueType": "List",
+      "repeatable": true
+    },
+    {
+      "name": "-json",
+      "valueType": "Switch",
+      "repeatable": false
+    },
+    {
+      "name": "-help",
+      "valueType": "Switch",
+      "repeatable": false
+    }
+  ],
+  "defaults": {
+    "selection": "Uses the default spec and returns an empty list when it has no Actions."
+  },
+  "effects": "Reads and validates a spec; it never starts or runs an Action provider.",
+  "examples": [
+    "winspec actions .\\machine.winspec.psd1 -Json"
+  ],
+  "related": [
+    "docs/api.md",
+    "docs/usage.md"
+  ]
+}

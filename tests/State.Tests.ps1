@@ -6,7 +6,7 @@ BeforeAll {
     Import-Module (Join-Path $script:Root 'provider-runtime.psm1') -Force
 }
 
-Describe 'built-in state authority' {
+Describe 'built-in state authority' -Tag 'Unit' {
     It 'uses only the three explicit built-in state managers' {
         @(Get-Managers).Name | Should -Be @('Registry', 'Service', 'Feature')
     }
@@ -32,7 +32,7 @@ Describe 'built-in state authority' {
     }
 }
 
-Describe 'schema and merge truth' {
+Describe 'schema and merge truth' -Tag 'Unit' {
     It 'accepts the versioned core schema and rejects removed trigger fields' {
         $catalog = Get-ProviderCatalog
         (Test-WinSpecSchema @{SchemaVersion = 1; Actions = @{} } $catalog).Valid | Should -BeTrue
@@ -53,7 +53,7 @@ Describe 'schema and merge truth' {
     }
 }
 
-Describe 'built-in state admission' {
+Describe 'built-in state admission' -Tag 'Unit' {
     BeforeAll {
         $script:Catalog = Get-ProviderCatalog
     }
@@ -105,7 +105,7 @@ Describe 'built-in state admission' {
     }
 }
 
-Describe 'core State result normalization' {
+Describe 'core State result normalization' -Tag 'Unit' {
     It 'fails a partially applied provider and preserves sibling receipts' {
         InModuleScope state {
             $catalog = @([pscustomobject]@{

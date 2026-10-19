@@ -1,0 +1,5 @@
+PLAN run [Script] -- opaque preview; Script was not executed
+Source: https://example.invalid/test.ps1
+Download: not performed
+Digest: no pin supplied
+Not checked: Script contents, runtime dependencies, or internal changes

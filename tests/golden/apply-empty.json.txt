@@ -1,0 +1,1 @@
+{"command":"apply","diagnostics":[],"results":{"comparison":{"Providers":[],"Status":"Unchanged"},"providers":[]},"schemaVersion":1,"status":"Unchanged"}

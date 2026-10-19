@@ -1,15 +1,16 @@
 BeforeAll {
+    . (Join-Path $PSScriptRoot 'TestSupport.ps1')
+    Import-Module (Join-Path $PSScriptRoot '../winspec/provider-runtime.psm1') -Force
     $script:RepoRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
     $script:WinSpec = Join-Path (Join-Path $script:RepoRoot 'winspec') 'winspec.ps1'
     function Invoke-WinSpecIntegration {
         param([string[]]$Arguments)
-        $ErrorActionPreference = 'Continue'
-        $text = & pwsh -NoProfile -File $script:WinSpec @Arguments 2>&1 | Out-String
-        [pscustomobject]@{ExitCode = $LASTEXITCODE; Text = $text.Trim() }
+        $r = Invoke-TestProcess -Path $script:WinSpec -Arguments $Arguments
+        [pscustomobject]@{ ExitCode = $r.ExitCode; Text = ($r.Stdout + $r.Stderr).Trim() }
     }
 }
 
-Describe 'external state provider integration' {
+Describe 'external state provider integration' -Tag 'Flow' {
     BeforeEach {
         $script:ProviderRoot = Join-Path $TestDrive 'providers'
         $script:Package = Join-Path $script:ProviderRoot 'acme'

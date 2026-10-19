@@ -1,64 +1,19 @@
 BeforeAll {
+    . (Join-Path $PSScriptRoot 'TestSupport.ps1')
     $script:RepoRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
     $script:WinSpec = Join-Path (Join-Path $script:RepoRoot 'winspec') 'winspec.ps1'
     Import-Module (Join-Path (Join-Path $script:RepoRoot 'winspec') `
             'provider-runtime.psm1') -Force
     function Invoke-WinSpecProcess {
-        param([string[]]$Arguments)
-        $ErrorActionPreference = 'Continue'
-        $text = & pwsh -NoProfile -File $script:WinSpec @Arguments 2>&1 | Out-String
-        [pscustomobject]@{ ExitCode = $LASTEXITCODE; Text = $text.Trim() }
-    }
-    function Invoke-WinSpecHostProcess {
-        param([string]$Executable, [string[]]$Arguments)
-        $ErrorActionPreference = 'Continue'
-        $text = & $Executable -NoProfile -File $script:WinSpec @Arguments 2>&1 |
-            Out-String
-        [pscustomobject]@{ ExitCode = $LASTEXITCODE; Text = $text.Trim() }
+        param([string[]]$Arguments, [string]$Executable = (Get-CurrentPowerShellPath))
+        $r = Invoke-TestProcess -Executable $Executable -Path $script:WinSpec -Arguments $Arguments
+        [pscustomobject]@{ ExitCode = $r.ExitCode; Text = ($r.Stdout + $r.Stderr).Trim() }
     }
 
     function Invoke-WinSpecSeparatedProcess {
-        param(
-            [string]$Executable = 'pwsh.exe',
-            [string[]]$Arguments
-        )
-
-        $start = New-Object Diagnostics.ProcessStartInfo
-        $start.FileName = $Executable
-        $start.Arguments = ((@('-NoProfile', '-File', $script:WinSpec) +
-                @($Arguments) | ForEach-Object {
-                    ConvertTo-ProcessArgument ([string]$_)
-                }) -join ' ')
-        $start.UseShellExecute = $false
-        $start.CreateNoWindow = $true
-        $start.RedirectStandardOutput = $true
-        $start.RedirectStandardError = $true
-        if ([IO.Path]::GetFileName($Executable) -ieq 'powershell.exe') {
-            $windowsModules = Join-Path $env:SystemRoot `
-                'System32\WindowsPowerShell\v1.0\Modules'
-            $modulePath = [string]$start.EnvironmentVariables['PSModulePath']
-            $otherModules = @($modulePath -split ';' | Where-Object {
-                    $_ -and $_ -ine $windowsModules
-                })
-            $start.EnvironmentVariables['PSModulePath'] =
-            @($windowsModules) + $otherModules -join ';'
-        }
-        $process = New-Object Diagnostics.Process
-        $process.StartInfo = $start
-        try {
-            $null = $process.Start()
-            $stdout = $process.StandardOutput.ReadToEnd()
-            $stderr = $process.StandardError.ReadToEnd()
-            $process.WaitForExit()
-            [pscustomobject]@{
-                ExitCode = $process.ExitCode
-                Stdout = $stdout.Trim()
-                Stderr = $stderr.Trim()
-            }
-        }
-        finally {
-            $process.Dispose()
-        }
+        param([string]$Executable = (Get-CurrentPowerShellPath), [string[]]$Arguments)
+        $r = Invoke-TestProcess -Executable $Executable -Path $script:WinSpec -Arguments $Arguments
+        [pscustomobject]@{ ExitCode = $r.ExitCode; Stdout = $r.Stdout.Trim(); Stderr = $r.Stderr.Trim() }
     }
 
     function New-TestActionProvider {
@@ -85,35 +40,8 @@ BeforeAll {
     }
 }
 
-Describe 'replacement command surface' {
-    It 'describes every command in top-level and per-command help' {
-        $commands = @(
-            'capture', 'status', 'validate', 'diff', 'apply', 'run',
-            'workflow', 'merge', 'providers', 'actions', 'sandbox',
-            'rollback', 'help')
-        $top = Invoke-WinSpecSeparatedProcess -Arguments @('help')
-
-        $top.ExitCode | Should -Be 0
-        $top.Stderr | Should -BeNullOrEmpty
-        foreach ($command in $commands) {
-            $top.Stdout | Should -Match "(?m)^  $command\s+-\s+"
-            $result = Invoke-WinSpecSeparatedProcess `
-                -Arguments @($command, '-Help')
-            $result.ExitCode | Should -Be 0
-            $result.Stderr | Should -BeNullOrEmpty
-            $result.Stdout | Should -Match "WinSpec $command"
-            $result.Stdout | Should -Match '(?m)^Purpose:'
-            $result.Stdout | Should -Match '(?m)^Usage:'
-            $result.Stdout | Should -Match '(?m)^Effects:'
-            $result.Stdout | Should -Match '(?m)^Default:'
-            $result.Stdout | Should -Match '(?m)^Example:'
-        }
-    }
-
-    It 'renders a human diagnostic code exactly once' -ForEach @(
-        @{ Executable = 'powershell.exe' }
-        @{ Executable = 'pwsh.exe' }
-    ) {
+Describe 'replacement command surface' -Tag 'Boundary' {
+    It 'renders a human diagnostic code exactly once' {
         $path = Join-Path $TestDrive 'invalid-human.winspec.psd1'
         Set-Content -LiteralPath $path -Value @'
 @{
@@ -122,19 +50,25 @@ Describe 'replacement command surface' {
 }
 '@
 
-        $result = Invoke-WinSpecSeparatedProcess -Executable $Executable `
+        $result = Invoke-WinSpecSeparatedProcess `
             -Arguments @('validate', $path)
 
         $result.ExitCode | Should -Be 2
-        $result.Stdout | Should -Match '^validate: Failed'
-        $result.Stderr | Should -BeExactly `
-            "InvalidRegistryValue: 'Taskbar.Alignment'"
+        $result.Stdout | Should -BeNullOrEmpty
+        $expected = @"
+FAIL validate -- validation did not complete successfully
+Spec: $path
+Mode: Structural
+Provider-owned subjects: 0
+Scope: runtime dependencies and successful execution are not proven.
+Code: InvalidRegistryValue
+Reason: 'Taskbar.Alignment'
+"@
+        $result.Stderr.Replace("`r`n", "`n") | Should -BeExactly $expected.Replace("`r`n", "`n").Trim()
+        ([regex]::Matches($result.Stderr, 'InvalidRegistryValue')).Count | Should -Be 1
     }
 
-    It 'keeps JSON diagnostics in stdout and stderr empty' -ForEach @(
-        @{ Executable = 'powershell.exe' }
-        @{ Executable = 'pwsh.exe' }
-    ) {
+    It 'keeps JSON diagnostics in stdout and stderr empty' {
         $path = Join-Path $TestDrive 'invalid-json.winspec.psd1'
         Set-Content -LiteralPath $path -Value @'
 @{
@@ -143,7 +77,7 @@ Describe 'replacement command surface' {
 }
 '@
 
-        $result = Invoke-WinSpecSeparatedProcess -Executable $Executable `
+        $result = Invoke-WinSpecSeparatedProcess `
             -Arguments @('validate', $path, '-Json')
 
         $result.ExitCode | Should -Be 2
@@ -171,13 +105,20 @@ Describe 'replacement command surface' {
         $document.diagnostics[0].code | Should -Be 'UnknownOption'
     }
 
-    It 'emits one parseable JSON provider result' {
+    It 'emits one parseable JSON provider result' -Tag 'Quick' {
         $result = Invoke-WinSpecProcess @('providers', '-Json')
         $result.ExitCode | Should -Be 0
         $document = $result.Text | ConvertFrom-Json
         $document.schemaVersion | Should -Be 1
         $document.status | Should -Be 'Succeeded'
         @($document.results.providers.Name) | Should -Contain 'Script'
+        foreach ($name in @('MicrosoftActivation', 'WindowsDebloat', 'OfficeDeployment')) {
+            $provider = @($document.results.providers | Where-Object name -EQ $name)
+            $provider.Count | Should -Be 1
+            $provider[0].origin | Should -Be 'Bundled'
+        }
+        $result.Text.TrimStart()[0] | Should -Be '{'
+        $result.Text.TrimEnd()[-1] | Should -Be '}'
     }
 
     It 'separates discovered providers from configured Actions without execution' {
@@ -338,19 +279,6 @@ Set-Content -LiteralPath '$sentinel' -Value `$request.operation
         (ConvertFrom-Json $direct.Text).results.actions[0].provider |
             Should -Be 'Same'
         (Get-Content -Raw -LiteralPath $sentinel).Trim() | Should -Be 'preview'
-    }
-
-    It 'emits exactly one JSON document from <Executable>' -ForEach @(
-        @{ Executable = 'powershell.exe' }
-        @{ Executable = 'pwsh.exe' }
-    ) {
-        $result = Invoke-WinSpecHostProcess $Executable @('providers', '-Json')
-
-        $result.ExitCode | Should -Be 0
-        $document = $result.Text | ConvertFrom-Json
-        $document.schemaVersion | Should -Be 1
-        $result.Text.TrimStart()[0] | Should -Be '{'
-        $result.Text.TrimEnd()[-1] | Should -Be '}'
     }
 
     It 'rejects invalid built-in State through one JSON admission result' {
@@ -538,12 +466,9 @@ Start-Sleep -Seconds 10
         $document.results.actions[0].ExitCode | Should -Be 17
     }
 
-    It 'validates a data-only spec and rejects a ps1 spec' {
-        $valid = Join-Path $TestDrive 'valid.winspec.psd1'
+    It 'rejects a ps1 spec instead of treating it as data' {
         $legacy = Join-Path $TestDrive 'legacy.ps1'
-        Set-Content -LiteralPath $valid -Value '@{ SchemaVersion = 1 }'
         Set-Content -LiteralPath $legacy -Value '@{ SchemaVersion = 1 }'
-        (Invoke-WinSpecProcess @('validate', $valid, '-Json')).ExitCode | Should -Be 0
         $failed = Invoke-WinSpecProcess @('validate', $legacy, '-Json')
         $failed.ExitCode | Should -Be 2
         $failed.Text | Should -Match 'UnsupportedSpecFormat'
@@ -589,6 +514,24 @@ Start-Sleep -Seconds 10
             Should -Be 'UnknownOption'
     }
 
+    It 'publishes a forced merge over an existing output with an unchanged JSON envelope' {
+        $base = Join-Path $TestDrive 'replace-base.psd1'
+        $incoming = Join-Path $TestDrive 'replace-incoming.psd1'
+        $output = Join-Path $TestDrive 'replace-merged.json'
+        [IO.File]::WriteAllText($base, "@{ SchemaVersion = 1; Name = 'base' }")
+        [IO.File]::WriteAllText($incoming, "@{ SchemaVersion = 1; Name = 'incoming' }")
+        [IO.File]::WriteAllText($output, '{"SchemaVersion":1,"Name":"previous"}')
+        $result = Invoke-WinSpecSeparatedProcess -Arguments @(
+            'merge', $base, $incoming, '-Output', $output, '-Strategy', 'theirs', '-Force', '-Json')
+        $result.ExitCode | Should -Be 0
+        $result.Stderr | Should -BeNullOrEmpty
+        $document = $result.Stdout | ConvertFrom-Json
+        $document.schemaVersion | Should -Be 1
+        $document.status | Should -Be 'Succeeded'
+        $document.results.Success | Should -BeTrue
+        $document.results.Merged.Name | Should -Be 'incoming'
+        (Get-Content -Raw -LiteralPath $output | ConvertFrom-Json).Name | Should -Be 'incoming'
+    }
     It 'does not publish a conflicted merge' {
         $base = Join-Path $TestDrive 'base.winspec.psd1'
         $incoming = Join-Path $TestDrive 'incoming.winspec.psd1'

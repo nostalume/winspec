@@ -1,0 +1,6 @@
+PLAN apply -- 1 State difference; apply was not called
+Spec: <SPEC>
+Selection: HumanState
+Resource Observed Desired
+HumanState.value false true
+Checkpoint: not created (DryRun)

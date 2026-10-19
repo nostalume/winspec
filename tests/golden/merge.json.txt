@@ -1,0 +1,1 @@
+{"command":"merge","diagnostics":[],"results":{"Conflicts":[],"Merged":{"Registry":{"Explorer":{"ShowHidden":false}},"SchemaVersion":1},"Strategy":"auto","Success":true},"schemaVersion":1,"status":"Succeeded"}

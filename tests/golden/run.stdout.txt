@@ -1,0 +1,6 @@
+OK run hello [Script] -- child completed successfully
+Spec: <SPEC>
+Source: <SCRIPT>
+Child exit: 0
+Child stdout:
+  Hello from controlled fixture

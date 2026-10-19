@@ -43,12 +43,15 @@ try {
         return
     }
 
+    $deadline = [Diagnostics.Stopwatch]::StartNew()
     $timeout = Get-BundledTimeoutSeconds $request
     $download = Get-BundledDownload -Uri $sourceUri `
         -Directory (Get-BundledTemporaryDirectory $request) `
-        -MaximumBytes 64MB -TimeoutSeconds $timeout -Extension '.exe'
+        -MaximumBytes 64MB -TimeoutSeconds $timeout -Extension '.exe' -DeadlineTimer $deadline
+    $primaryError = $null
     try {
         Test-MicrosoftSignature $download.Path
+        if ($deadline.Elapsed.TotalSeconds -ge $timeout) { throw "ChildTimeout: exceeded $timeout seconds" }
         if (-not [IO.Directory]::Exists($path)) {
             $null = [IO.Directory]::CreateDirectory($path)
         }
@@ -67,7 +70,7 @@ try {
         }
         if (-not $cache) {
             $result = Invoke-BundledProcess -FilePath $installerPath `
-                -WorkingDirectory $path -TimeoutSeconds $timeout
+                -WorkingDirectory $path -TimeoutSeconds $timeout -DeadlineTimer $deadline
             $output.exitCode = $result.ExitCode
             $output.durationMilliseconds = $result.DurationMilliseconds
             $output.stdout = $result.Stdout
@@ -79,11 +82,15 @@ try {
         else {
             $status = 'Succeeded'
         }
+        if ($deadline.Elapsed.TotalSeconds -ge $timeout) { throw "ChildTimeout: exceeded $timeout seconds" }
         Write-BundledProviderResponse $request $status $output
     }
+    catch { $primaryError = $_; throw }
     finally {
-        if ([IO.File]::Exists($download.Path)) {
-            [IO.File]::Delete($download.Path)
+        try { if ([IO.File]::Exists($download.Path)) { [IO.File]::Delete($download.Path) } }
+        catch {
+            if ($primaryError) { $primaryError.Exception.Data['DownloadCleanupError'] = $_.Exception.Message }
+            else { throw }
         }
     }
 }

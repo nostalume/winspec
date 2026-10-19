@@ -1,0 +1,1 @@
+{"command":"run","diagnostics":[],"results":{"actions":[{"Arguments":[],"DurationMilliseconds":0,"ExitCode":0,"Interactive":false,"Interpreter":"<HOST>","Source":"<ROOT>\\warning.ps1","Status":"Succeeded","Stderr":"notice only\n","StderrTruncated":false,"Stdout":"payload\n","StdoutTruncated":false}]},"schemaVersion":1,"status":"Succeeded"}

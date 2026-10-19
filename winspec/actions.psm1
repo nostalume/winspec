@@ -26,9 +26,12 @@ function Get-RemoteScript {
     param(
         [uri]$Uri,
         [string]$Sha256,
-        [ValidateRange(1, 3600)][int]$TimeoutSeconds = 300
+        [ValidateRange(1, 3600)][int]$TimeoutSeconds = 300,
+        [scriptblock]$Progress,
+        [Diagnostics.Stopwatch]$DeadlineTimer
     )
 
+    if (-not $DeadlineTimer) { $DeadlineTimer = [Diagnostics.Stopwatch]::StartNew() }
     $integrity = Get-RemoteScriptIntegrity -Uri $Uri -Sha256 $Sha256
     $requestedUri = $Uri.AbsoluteUri
     $currentUri = $Uri
@@ -49,17 +52,19 @@ function Get-RemoteScript {
                 $currentUri.Scheme -ne 'https') {
                 throw "InsecureRemoteScriptRedirect: '$currentUri'"
             }
-            $remaining = [Math]::Floor(
-                ($TimeoutSeconds - $timer.Elapsed.TotalSeconds) * 1000)
-            if ($remaining -lt 1) {
-                throw "RemoteScriptTimeout: exceeded $TimeoutSeconds seconds"
-            }
             $request = [Net.HttpWebRequest]::Create($currentUri)
             $request.AllowAutoRedirect = $false
             $request.UserAgent = 'WinSpec/1'
-            $request.Timeout = [int][Math]::Min([int]::MaxValue, $remaining)
+            if ($Progress) { $null = & $Progress 'downloading remote Script' 0 $TimeoutSeconds }
+            $request.Timeout = Get-ProcessRemainingMilliseconds $DeadlineTimer $TimeoutSeconds "RemoteScriptTimeout: exceeded $TimeoutSeconds seconds"
             $request.ReadWriteTimeout = $request.Timeout
-            $response = $request.GetResponse()
+            $pending = $request.GetResponseAsync()
+            while (-not $pending.IsCompleted) {
+                $null = Get-ProcessRemainingMilliseconds $DeadlineTimer $TimeoutSeconds "RemoteScriptTimeout: exceeded $TimeoutSeconds seconds"
+                Start-Sleep -Milliseconds 5
+            }
+            $null = Get-ProcessRemainingMilliseconds $DeadlineTimer $TimeoutSeconds "RemoteScriptTimeout: exceeded $TimeoutSeconds seconds"
+            $response = $pending.GetAwaiter().GetResult()
             $statusCode = [int]$response.StatusCode
             if ($statusCode -ge 200 -and $statusCode -le 299) {
                 break
@@ -78,6 +83,7 @@ function Get-RemoteScript {
             if ($nextUri.Scheme -notin @('http', 'https')) {
                 throw "InvalidRemoteScriptRedirect: '$nextUri'"
             }
+            $request.Abort()
             $response.Dispose()
             $response = $null
             $currentUri = $nextUri
@@ -93,16 +99,17 @@ function Get-RemoteScript {
         $buffer = New-Object byte[] 81920
         $size = [long]0
         while ($true) {
-            $remaining = [Math]::Floor(
-                ($TimeoutSeconds - $timer.Elapsed.TotalSeconds) * 1000)
-            if ($remaining -lt 1) {
-                throw "RemoteScriptTimeout: exceeded $TimeoutSeconds seconds"
-            }
+            $remaining = Get-ProcessRemainingMilliseconds $DeadlineTimer $TimeoutSeconds "RemoteScriptTimeout: exceeded $TimeoutSeconds seconds"
             if ($inputStream.CanTimeout) {
-                $inputStream.ReadTimeout = [int][Math]::Min(
-                    [int]::MaxValue, $remaining)
+                $inputStream.ReadTimeout = $remaining
             }
-            $read = $inputStream.Read($buffer, 0, $buffer.Length)
+            $pending = $inputStream.ReadAsync($buffer, 0, $buffer.Length)
+            while (-not $pending.IsCompleted) {
+                $null = Get-ProcessRemainingMilliseconds $DeadlineTimer $TimeoutSeconds "RemoteScriptTimeout: exceeded $TimeoutSeconds seconds"
+                Start-Sleep -Milliseconds 5
+            }
+            $null = Get-ProcessRemainingMilliseconds $DeadlineTimer $TimeoutSeconds "RemoteScriptTimeout: exceeded $TimeoutSeconds seconds"
+            $read = $pending.GetAwaiter().GetResult()
             if ($read -eq 0) { break }
             if ($size + $read -gt $Script:MaximumRemoteBytes) {
                 throw 'RemoteScriptTooLarge: exceeds 16 MiB'
@@ -118,6 +125,7 @@ function Get-RemoteScript {
         if ($Sha256 -and $digest -cne $Sha256.ToLowerInvariant()) {
             throw "Sha256Mismatch: expected $Sha256, received $digest"
         }
+        $null = Get-ProcessRemainingMilliseconds $DeadlineTimer $TimeoutSeconds "RemoteScriptTimeout: exceeded $TimeoutSeconds seconds"
         $completed = $true
         return [pscustomobject]@{
             Path = $path
@@ -132,6 +140,7 @@ function Get-RemoteScript {
     }
     catch {
         $primaryError = $_
+        try { if ($request) { $request.Abort() } } catch { $primaryError.Exception.Data['DownloadCleanupError'] = $_.Exception.Message }
         throw
     }
     finally {
@@ -163,9 +172,12 @@ function Invoke-PowerShellScript {
         [Parameter(Mandatory)][string]$Path,
         [string[]]$Arguments,
         [switch]$Interactive,
-        [ValidateRange(1, 3600)][int]$TimeoutSeconds = 300
+        [ValidateRange(1, 3600)][int]$TimeoutSeconds = 300,
+        [scriptblock]$Progress,
+        [Diagnostics.Stopwatch]$DeadlineTimer
     )
 
+    if (-not $DeadlineTimer) { $DeadlineTimer = [Diagnostics.Stopwatch]::StartNew() }
     $start = New-Object Diagnostics.ProcessStartInfo
     $start.FileName = Get-CurrentPowerShellPath
     $parts = @('-NoProfile')
@@ -182,50 +194,25 @@ function Invoke-PowerShellScript {
         $start.RedirectStandardOutput = $true
         $start.RedirectStandardError = $true
     }
-    $process = New-Object Diagnostics.Process
-    $process.StartInfo = $start
-    $timer = [Diagnostics.Stopwatch]::StartNew()
-    try {
-        if (-not $process.Start()) { throw "ScriptStartFailed: '$Path'" }
-        if ($Interactive) {
-            if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
-                Stop-ProviderProcessTree $process
-                throw "ScriptTimeout: '$Path' exceeded $TimeoutSeconds seconds"
-            }
-            $stdout = $null
-            $stderr = $null
-            $stdoutTruncated = $false
-            $stderrTruncated = $false
-        }
-        else {
-            $streams = Receive-BoundedProcessOutput -Process $process `
-                -TimeoutSeconds $TimeoutSeconds -StdoutLimit 1MB `
-                -StderrLimit 1MB `
-                -TimeoutMessage "ScriptTimeout: '$Path' exceeded $TimeoutSeconds seconds"
-            $stdout = $streams.Stdout
-            $stderr = $streams.Stderr
-            $stdoutTruncated = $streams.StdoutTruncated
-            $stderrTruncated = $streams.StderrTruncated
-        }
-        return [pscustomobject]@{
-            Status = if ($process.ExitCode -eq 0) { 'Succeeded' } else { 'Failed' }
-            ExitCode = $process.ExitCode
-            Stdout = $stdout
-            Stderr = $stderr
-            StdoutTruncated = $stdoutTruncated
-            StderrTruncated = $stderrTruncated
-            DurationMilliseconds = $timer.ElapsedMilliseconds
-            Interpreter = $start.FileName
-            Arguments = @($Arguments)
-            Interactive = [bool]$Interactive
-        }
-    }
-    finally {
-        $timer.Stop()
-        $process.Dispose()
+    if ($Interactive) { $Progress = $null }
+    $streams = Invoke-BoundedProcess -StartInfo $start -TimeoutSeconds $TimeoutSeconds `
+        -DeadlineTimer $DeadlineTimer -Progress $Progress -StdoutLimit 1MB -StderrLimit 1MB `
+        -Activity 'executing child; captured output will be shown after completion' `
+        -StartFailureMessage "ScriptStartFailed: '$Path'" `
+        -TimeoutMessage "ScriptTimeout: '$Path' exceeded $TimeoutSeconds seconds"
+    return [pscustomobject]@{
+        Status = if ($streams.ExitCode -eq 0) { 'Succeeded' } else { 'Failed' }
+        ExitCode = $streams.ExitCode
+        Stdout = $streams.Stdout
+        Stderr = $streams.Stderr
+        StdoutTruncated = $streams.StdoutTruncated
+        StderrTruncated = $streams.StderrTruncated
+        DurationMilliseconds = $streams.DurationMilliseconds
+        Interpreter = $start.FileName
+        Arguments = @($Arguments)
+        Interactive = [bool]$Interactive
     }
 }
-
 function Invoke-ScriptAction {
     [CmdletBinding()]
     param(
@@ -235,9 +222,12 @@ function Invoke-ScriptAction {
         [string]$Sha256,
         [switch]$DryRun,
         [switch]$Interactive,
-        [ValidateRange(1, 3600)][int]$TimeoutSeconds = 300
+        [ValidateRange(1, 3600)][int]$TimeoutSeconds = 300,
+        [scriptblock]$Progress,
+        [Diagnostics.Stopwatch]$DeadlineTimer
     )
 
+    if (-not $DeadlineTimer) { $DeadlineTimer = [Diagnostics.Stopwatch]::StartNew() }
     $hasFile = $Configuration.ContainsKey('File')
     $hasUri = $Configuration.ContainsKey('Uri')
     if ($hasFile -eq $hasUri) {
@@ -301,7 +291,7 @@ function Invoke-ScriptAction {
             }
         }
         $temporary = Get-RemoteScript -Uri $uri -Sha256 $requestedDigest `
-            -TimeoutSeconds $TimeoutSeconds
+            -TimeoutSeconds $TimeoutSeconds -Progress $Progress -DeadlineTimer $DeadlineTimer
         $path = $temporary.Path
         $source = $Configuration.Uri
     }
@@ -316,17 +306,9 @@ function Invoke-ScriptAction {
     }
     $primaryError = $null
     try {
-        $childTimeout = $TimeoutSeconds
-        if ($temporary) {
-            $childTimeout = [Math]::Floor(
-                $TimeoutSeconds -
-                ($temporary.DurationMilliseconds / 1000))
-            if ($childTimeout -lt 1) {
-                throw "RemoteScriptTimeout: exceeded $TimeoutSeconds seconds"
-            }
-        }
         $result = Invoke-PowerShellScript -Path $path -Arguments $allArguments `
-            -Interactive:$useInteractive -TimeoutSeconds $childTimeout
+            -Interactive:$useInteractive -TimeoutSeconds $TimeoutSeconds -Progress $Progress `
+            -DeadlineTimer $DeadlineTimer
         $result | Add-Member NoteProperty Source $source
         if ($temporary) {
             $result | Add-Member NoteProperty Integrity $temporary.Integrity
@@ -371,7 +353,8 @@ function Invoke-WinSpecAction {
         [switch]$DryRun,
         [switch]$Interactive,
         [string]$Sha256,
-        [ValidateRange(1, 3600)][int]$TimeoutSeconds = 300
+        [ValidateRange(1, 3600)][int]$TimeoutSeconds = 300,
+        [scriptblock]$Progress
     )
 
     $configuration = if ($Action.ContainsKey('With')) { $Action.With } else { @{} }
@@ -379,7 +362,7 @@ function Invoke-WinSpecAction {
         return Invoke-ScriptAction -Configuration $configuration `
             -BasePath $BasePath -Arguments $Arguments -DryRun:$DryRun `
             -Interactive:$Interactive -Sha256 $Sha256 `
-            -TimeoutSeconds $TimeoutSeconds
+            -TimeoutSeconds $TimeoutSeconds -Progress $Progress
     }
     if ($Interactive) {
         throw "InteractiveProviderUnsupported: '$($Provider.Name)' owns its interaction policy"
@@ -401,7 +384,7 @@ function Invoke-WinSpecAction {
             timeoutSeconds = $TimeoutSeconds
             workingDirectory = [IO.Path]::GetFullPath($BasePath)
         }
-    } -TimeoutSeconds $TimeoutSeconds
+    } -TimeoutSeconds $TimeoutSeconds -Progress $Progress
 }
 
 Export-ModuleMember -Function @(

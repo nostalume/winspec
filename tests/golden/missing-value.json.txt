@@ -1,0 +1,1 @@
+{"command":"run","diagnostics":[{"code":"MissingOptionValue","message":"MissingOptionValue: '-Spec'","severity":"error"}],"results":{},"schemaVersion":1,"status":"Failed"}

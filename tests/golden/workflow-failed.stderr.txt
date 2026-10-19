@@ -1,0 +1,10 @@
+FAIL workflow setup -- stopped at step 2 of 3
+Spec: <SPEC>
+Step Operation Identity Result
+1 Run hello Succeeded
+2 Run broken Failed
+3 Run hello Skipped
+Summary: 1 succeeded, 1 failed, 1 skipped
+Failed child exit: 7
+Reason: fixture failure: missing input
+Recovery: steps already completed were not undone; inspect effects before retrying.

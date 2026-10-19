@@ -1,12 +1,13 @@
 BeforeAll {
+    . (Join-Path $PSScriptRoot 'TestSupport.ps1')
+    Import-Module (Join-Path $PSScriptRoot '../winspec/provider-runtime.psm1') -Force
     $script:RepoRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
     $script:WinSpec = Join-Path (Join-Path $script:RepoRoot 'winspec') 'winspec.ps1'
 
     function Invoke-WinSpecProcess {
         param([string[]]$Arguments)
-        $ErrorActionPreference = 'Continue'
-        $text = & pwsh -NoProfile -File $script:WinSpec @Arguments 2>&1 | Out-String
-        [pscustomobject]@{ ExitCode = $LASTEXITCODE; Text = $text.Trim() }
+        $r = Invoke-TestProcess -Path $script:WinSpec -Arguments $Arguments
+        [pscustomobject]@{ ExitCode = $r.ExitCode; Text = ($r.Stdout + $r.Stderr).Trim() }
     }
 
     function Write-TestJson {
@@ -15,47 +16,41 @@ BeforeAll {
     }
 }
 
-Describe 'bundled Action catalog' {
-    It 'discovers all maintained Actions without a provider path' {
-        $result = Invoke-WinSpecProcess @('providers', '-Json')
-
-        $result.ExitCode | Should -Be 0
-        $providers = @((ConvertFrom-Json $result.Text).results.providers)
-        foreach ($name in @('MicrosoftActivation', 'WindowsDebloat', 'OfficeDeployment')) {
-            $provider = @($providers | Where-Object name -EQ $name)
-            $provider.Count | Should -Be 1
-            $provider[0].origin | Should -Be 'Bundled'
-        }
-    }
-}
-
-Describe 'custom Script Actions' {
-    It 'preserves empty, spaced, quoted, and trailing-backslash arguments' {
+Describe 'custom Script Actions' -Tag 'Flow' {
+    It 'preserves configured special arguments and forwarded fixed parameters in the named Use and With envelope' {
         $scriptPath = Join-Path $TestDrive 'arguments.ps1'
         $specPath = Join-Path $TestDrive 'arguments.winspec.json'
-        Set-Content -LiteralPath $scriptPath -Encoding utf8 -Value (
-            'ConvertTo-Json -InputObject @($args) -Compress')
-        $expected = @('two words', '', 'quote"inside', 'trailing\')
+        Set-Content -LiteralPath $scriptPath -Encoding utf8 -Value @'
+param([string]$Space, [string]$Empty, [string]$Quote, [string]$Slash, [string]$First, [string]$Second)
+@{
+    values = @($Space, $Empty, $Quote, $Slash, $First, $Second) + @($args)
+    envelope = "$First|$Second"
+} | ConvertTo-Json -Depth 3 -Compress
+'@
+        $configured = @('two words', '', 'quote"inside', 'trailing\', 'configured')
         Write-TestJson $specPath @{
             SchemaVersion = 1
             Actions = @{
                 arguments = @{
                     Use = 'Script'
-                    With = @{ File = './arguments.ps1'; Args = $expected }
+                    With = @{ File = './arguments.ps1'; Args = $configured }
                 }
             }
         }
 
         $result = Invoke-WinSpecProcess @(
-            'run', 'arguments', '-Spec', $specPath, '-Json')
+            'run', 'arguments', '-Spec', $specPath, '-Json', '--', 'forwarded')
 
         $result.ExitCode | Should -Be 0
         $stdout = (ConvertFrom-Json $result.Text).results.actions[0].result.stdout
-        $actual = [object[]](ConvertFrom-Json -InputObject $stdout)
+        $payload = ConvertFrom-Json -InputObject $stdout
+        $actual = [object[]]$payload.values
+        $expected = @($configured) + @('forwarded')
         $actual.Count | Should -Be $expected.Count
         for ($index = 0; $index -lt $expected.Count; $index++) {
             $actual[$index] | Should -BeExactly $expected[$index]
         }
+        $payload.envelope | Should -Be 'configured|forwarded'
     }
 
     It 'rejects a digest on a local Script instead of silently ignoring it' {
@@ -79,30 +74,6 @@ Describe 'custom Script Actions' {
 
         $result.ExitCode | Should -Be 2
         $result.Text | Should -Match 'InvalidSha256'
-    }
-
-    It 'runs a named local Script through the Use and With envelope' {
-        $scriptPath = Join-Path $TestDrive 'hello.ps1'
-        $specPath = Join-Path $TestDrive 'script.winspec.json'
-        Set-Content -LiteralPath $scriptPath -Encoding utf8 -Value (
-            'param([string]$First,[string]$Second); "$First|$Second"')
-        Write-TestJson $specPath @{
-            SchemaVersion = 1
-            Actions = @{
-                hello = @{
-                    Use = 'Script'
-                    With = @{ File = './hello.ps1'; Args = @('configured') }
-                }
-            }
-        }
-
-        $result = Invoke-WinSpecProcess @(
-            'run', 'hello', '-Spec', $specPath, '-Json', '--', 'forwarded')
-
-        $result.ExitCode | Should -Be 0
-        $document = ConvertFrom-Json $result.Text
-        $document.results.actions[0].result.stdout.Trim() |
-            Should -Be 'configured|forwarded'
     }
 
     It 'rejects obsolete flat Script fields' {
@@ -177,7 +148,7 @@ Describe 'custom Script Actions' {
     }
 }
 
-Describe 'top-level Workflows' {
+Describe 'top-level Workflows' -Tag 'Flow' {
     BeforeEach {
         $scriptPath = Join-Path $TestDrive 'append.ps1'
         $script:orderPath = Join-Path $TestDrive 'order.txt'
@@ -208,15 +179,26 @@ Describe 'top-level Workflows' {
         }
     }
 
-    It 'runs named Actions sequentially' {
+    It 'runs named Actions sequentially and publishes a forced Capture' {
+        $output = Join-Path $TestDrive 'workflow-captured.json'
+        [IO.File]::WriteAllText($output, '{"SchemaVersion":1,"BeforeOverwrite":true}')
+        $value = Get-Content -Raw -LiteralPath $script:specPath | ConvertFrom-Json
+        # No State sections: spec-scoped Capture observes no live providers.
+        $value.Workflows.ordered.Steps = @($value.Workflows.ordered.Steps) + @(
+            [pscustomobject]@{ Capture = [pscustomobject]@{ Output = './workflow-captured.json'; Force = $true } })
+        $value | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $script:specPath -Encoding utf8
         $result = Invoke-WinSpecProcess @(
             'workflow', 'ordered', '-Spec', $script:specPath, '-Json')
 
         $result.ExitCode | Should -Be 0
         @(Get-Content -LiteralPath $script:orderPath) | Should -Be @('first', 'second')
         $document = ConvertFrom-Json $result.Text
-        @($document.results.steps).Count | Should -Be 2
-        @($document.results.steps.status) | Should -Be @('Succeeded', 'Succeeded')
+        @($document.results.steps).Count | Should -Be 3
+        @($document.results.steps.status) | Should -Be @('Succeeded', 'Succeeded', 'Succeeded')
+        $document.results.steps[2].Kind | Should -Be 'Capture'
+        $published = Get-Content -Raw -LiteralPath $output | ConvertFrom-Json
+        $published.SchemaVersion | Should -Be 1
+        @($published.PSObject.Properties.Name) | Should -Be @('SchemaVersion')
     }
 
     It 'does not start Actions during dry-run' {

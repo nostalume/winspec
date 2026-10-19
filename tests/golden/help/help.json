@@ -1,0 +1,31 @@
+{
+  "topic": "help",
+  "summary": "Show the command inventory or detailed help for one command.",
+  "usage": [
+    "winspec help [command]",
+    "winspec <command> -Help"
+  ],
+  "options": [
+    {
+      "name": "-json",
+      "valueType": "Switch",
+      "repeatable": false
+    },
+    {
+      "name": "-help",
+      "valueType": "Switch",
+      "repeatable": false
+    }
+  ],
+  "defaults": {
+    "selection": "Shows the complete command inventory."
+  },
+  "effects": "Writes documentation to stdout without loading a spec or provider catalog.",
+  "examples": [
+    "winspec help run"
+  ],
+  "related": [
+    "docs/api.md",
+    "docs/usage.md"
+  ]
+}

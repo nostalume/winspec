@@ -1,0 +1,7 @@
+FAIL run [Script] -- timeout after 1s
+Source: <SLOW>
+WinSpec exit: 4
+Cleanup: not reported
+Code: ScriptTimeout
+Reason: '<SLOW>' exceeded 1 seconds
+Recovery: external effects may remain; no automatic retry or rollback occurred.

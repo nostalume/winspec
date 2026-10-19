@@ -1,0 +1,45 @@
+{
+  "topic": "status",
+  "summary": "Observe selected State without publishing or changing it.",
+  "usage": [
+    "winspec status [spec] [-Providers names] [-ProviderPath roots] [-Json]"
+  ],
+  "options": [
+    {
+      "name": "-providers",
+      "valueType": "List",
+      "repeatable": true
+    },
+    {
+      "name": "-providerpath",
+      "valueType": "List",
+      "repeatable": true
+    },
+    {
+      "name": "-timeoutseconds",
+      "valueType": "Integer",
+      "repeatable": false
+    },
+    {
+      "name": "-json",
+      "valueType": "Switch",
+      "repeatable": false
+    },
+    {
+      "name": "-help",
+      "valueType": "Switch",
+      "repeatable": false
+    }
+  ],
+  "defaults": {
+    "selection": "Uses State sections in a spec, or core State when no spec is supplied."
+  },
+  "effects": "Reads machine State only.",
+  "examples": [
+    "winspec status .\\machine.winspec.psd1 -Providers Registry"
+  ],
+  "related": [
+    "docs/api.md",
+    "docs/usage.md"
+  ]
+}

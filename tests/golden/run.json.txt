@@ -1,0 +1,1 @@
+{"command":"run","diagnostics":[],"results":{"actions":[{"name":"hello","result":{"Arguments":["secret-argument"],"DurationMilliseconds":0,"ExitCode":0,"Interactive":false,"Interpreter":"<HOST>","Source":"<SCRIPT>","Status":"Succeeded","Stderr":"","StderrTruncated":false,"Stdout":"Hello from controlled fixture\n","StdoutTruncated":false}}]},"schemaVersion":1,"status":"Succeeded"}

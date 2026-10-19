@@ -1,0 +1,1 @@
+{"command":"run","diagnostics":[],"results":{"actions":[{"Arguments":[],"ExpectedSha256":null,"Integrity":"Unpinned","Interactive":false,"Opaque":true,"RequestedUri":"https://user:secret@example.invalid/test.ps1?token=private#fragment","Source":"https://user:secret@example.invalid/test.ps1?token=private#fragment","Status":"Planned"}]},"schemaVersion":1,"status":"Planned"}

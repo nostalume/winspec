@@ -1,0 +1,50 @@
+{
+  "topic": "workflow",
+  "summary": "Execute or preview one configured ordered multi-step Workflow.",
+  "usage": [
+    "winspec workflow <name> [-Spec spec] [-DryRun] [-Json]"
+  ],
+  "options": [
+    {
+      "name": "-spec",
+      "valueType": "String",
+      "repeatable": false
+    },
+    {
+      "name": "-providerpath",
+      "valueType": "List",
+      "repeatable": true
+    },
+    {
+      "name": "-dryrun",
+      "valueType": "Switch",
+      "repeatable": false
+    },
+    {
+      "name": "-timeoutseconds",
+      "valueType": "Integer",
+      "repeatable": false
+    },
+    {
+      "name": "-json",
+      "valueType": "Switch",
+      "repeatable": false
+    },
+    {
+      "name": "-help",
+      "valueType": "Switch",
+      "repeatable": false
+    }
+  ],
+  "defaults": {
+    "selection": "Uses the named Workflow in the selected/default spec."
+  },
+  "effects": "May apply State, run Actions, and publish captures in declared order.",
+  "examples": [
+    "winspec workflow setup -Spec .\\machine.winspec.psd1 -DryRun"
+  ],
+  "related": [
+    "docs/api.md",
+    "docs/usage.md"
+  ]
+}

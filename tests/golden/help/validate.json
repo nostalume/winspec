@@ -1,0 +1,45 @@
+{
+  "topic": "validate",
+  "summary": "Check a specification and report provider-validation coverage.",
+  "usage": [
+    "winspec validate [spec] [-ProviderPath roots] [-PreviewActions] [-Json]"
+  ],
+  "options": [
+    {
+      "name": "-providerpath",
+      "valueType": "List",
+      "repeatable": true
+    },
+    {
+      "name": "-previewactions",
+      "valueType": "Switch",
+      "repeatable": false
+    },
+    {
+      "name": "-timeoutseconds",
+      "valueType": "Integer",
+      "repeatable": false
+    },
+    {
+      "name": "-json",
+      "valueType": "Switch",
+      "repeatable": false
+    },
+    {
+      "name": "-help",
+      "valueType": "Switch",
+      "repeatable": false
+    }
+  ],
+  "defaults": {
+    "selection": "Uses the default spec and performs structural validation without provider execution."
+  },
+  "effects": "Structural mode reads data only; -PreviewActions starts trusted Action-provider previews.",
+  "examples": [
+    "winspec validate .\\machine.winspec.psd1 -PreviewActions"
+  ],
+  "related": [
+    "docs/api.md",
+    "docs/usage.md"
+  ]
+}

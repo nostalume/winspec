@@ -31,10 +31,14 @@ function Write-BundledProviderFailure {
     param([Parameter(Mandatory)]$Request, [Parameter(Mandatory)]$ErrorRecord)
 
     $message = $ErrorRecord.Exception.Message
-    Write-BundledProviderResponse $Request 'Failed' @{} @(@{
+    $diagnostics = @(@{
             code = ($message -split ':')[0]
             message = $message
         })
+    foreach ($key in @('ProcessCleanupError', 'TemporaryCleanupError', 'RemoteScriptCleanupError', 'DownloadCleanupError')) {
+        if ($ErrorRecord.Exception.Data.Contains($key)) { $diagnostics += @{ code = $key; message = [string]$ErrorRecord.Exception.Data[$key] } }
+    }
+    Write-BundledProviderResponse $Request 'Failed' @{} $diagnostics
 }
 
 function Assert-BundledProviderFields {
@@ -121,6 +125,7 @@ function Get-BundledDownload {
         [Parameter(Mandatory)][string]$Directory,
         [Parameter(Mandatory)][ValidateRange(1, 1GB)][long]$MaximumBytes,
         [ValidateRange(1, 3600)][int]$TimeoutSeconds = 300,
+        [Diagnostics.Stopwatch]$DeadlineTimer,
         [string]$Extension = '.bin'
     )
 
@@ -132,12 +137,14 @@ function Get-BundledDownload {
     }
 
     $path = Join-Path $Directory ([IO.Path]::GetRandomFileName() + $Extension)
+    if (-not $DeadlineTimer) { $DeadlineTimer = [Diagnostics.Stopwatch]::StartNew() }
+    $timeoutMessage = "DownloadTimeout: exceeded $TimeoutSeconds seconds"
     $request = [Net.HttpWebRequest]::Create($Uri)
     $request.AllowAutoRedirect = $true
     $request.MaximumAutomaticRedirections = 5
     $request.UserAgent = 'WinSpec/1'
-    $request.Timeout = $TimeoutSeconds * 1000
-    $request.ReadWriteTimeout = $TimeoutSeconds * 1000
+    $request.Timeout = Get-ProcessRemainingMilliseconds $DeadlineTimer $TimeoutSeconds $timeoutMessage
+    $request.ReadWriteTimeout = $request.Timeout
     $response = $null
     $inputStream = $null
     $outputStream = $null
@@ -145,7 +152,13 @@ function Get-BundledDownload {
     $completed = $false
     $primaryError = $null
     try {
-        $response = $request.GetResponse()
+        $pending = $request.GetResponseAsync()
+        while (-not $pending.IsCompleted) {
+            $null = Get-ProcessRemainingMilliseconds $DeadlineTimer $TimeoutSeconds $timeoutMessage
+            Start-Sleep -Milliseconds 5
+        }
+        $null = Get-ProcessRemainingMilliseconds $DeadlineTimer $TimeoutSeconds $timeoutMessage
+        $response = $pending.GetAwaiter().GetResult()
         if ($response.ContentLength -gt $MaximumBytes) {
             throw "DownloadTooLarge: exceeds $MaximumBytes bytes"
         }
@@ -155,7 +168,17 @@ function Get-BundledDownload {
             [IO.FileShare]::None)
         $buffer = New-Object byte[] 81920
         $size = [long]0
-        while (($read = $inputStream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+        while ($true) {
+            $remaining = Get-ProcessRemainingMilliseconds $DeadlineTimer $TimeoutSeconds $timeoutMessage
+            if ($inputStream.CanTimeout) { $inputStream.ReadTimeout = $remaining }
+            $pending = $inputStream.ReadAsync($buffer, 0, $buffer.Length)
+            while (-not $pending.IsCompleted) {
+                $null = Get-ProcessRemainingMilliseconds $DeadlineTimer $TimeoutSeconds $timeoutMessage
+                Start-Sleep -Milliseconds 5
+            }
+            $null = Get-ProcessRemainingMilliseconds $DeadlineTimer $TimeoutSeconds $timeoutMessage
+            $read = $pending.GetAwaiter().GetResult()
+            if ($read -eq 0) { break }
             if ($size + $read -gt $MaximumBytes) {
                 throw "DownloadTooLarge: exceeds $MaximumBytes bytes"
             }
@@ -167,6 +190,7 @@ function Get-BundledDownload {
         $null = $algorithm.TransformFinalBlock($empty, 0, 0)
         $digest = ([BitConverter]::ToString($algorithm.Hash)).Replace(
             '-', '').ToLowerInvariant()
+        $null = Get-ProcessRemainingMilliseconds $DeadlineTimer $TimeoutSeconds $timeoutMessage
         $completed = $true
         return [pscustomobject]@{
             Path = $path
@@ -178,6 +202,7 @@ function Get-BundledDownload {
     }
     catch {
         $primaryError = $_
+        try { if ($request) { $request.Abort() } } catch { $primaryError.Exception.Data['DownloadCleanupError'] = $_.Exception.Message }
         throw
     }
     finally {
@@ -219,7 +244,8 @@ function Invoke-BundledProcess {
         [string[]]$ArgumentList = @(),
         [string]$WorkingDirectory,
         [switch]$Interactive,
-        [ValidateRange(1, 3600)][int]$TimeoutSeconds = 300
+        [ValidateRange(1, 3600)][int]$TimeoutSeconds = 300,
+        [Diagnostics.Stopwatch]$DeadlineTimer
     )
 
     $start = New-Object Diagnostics.ProcessStartInfo
@@ -235,47 +261,20 @@ function Invoke-BundledProcess {
         $start.RedirectStandardError = $true
     }
 
-    $process = New-Object Diagnostics.Process
-    $process.StartInfo = $start
-    $timer = [Diagnostics.Stopwatch]::StartNew()
-    try {
-        if (-not $process.Start()) {
-            throw "ChildStartFailed: '$FilePath'"
-        }
-        if ($Interactive) {
-            if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
-                Stop-ProviderProcessTree $process
-                throw "ChildTimeout: '$FilePath' exceeded $TimeoutSeconds seconds"
-            }
-            $streams = [pscustomobject]@{
-                Stdout = $null
-                Stderr = $null
-                StdoutTruncated = $false
-                StderrTruncated = $false
-            }
-        }
-        else {
-            $streams = Receive-BoundedProcessOutput -Process $process `
-                -TimeoutSeconds $TimeoutSeconds -StdoutLimit 1MB `
-                -StderrLimit 1MB `
-                -TimeoutMessage "ChildTimeout: '$FilePath' exceeded $TimeoutSeconds seconds"
-        }
-        return [pscustomobject]@{
-            ExitCode = $process.ExitCode
-            Stdout = $streams.Stdout
-            Stderr = $streams.Stderr
-            StdoutTruncated = $streams.StdoutTruncated
-            StderrTruncated = $streams.StderrTruncated
-            DurationMilliseconds = $timer.ElapsedMilliseconds
-            Interactive = [bool]$Interactive
-        }
-    }
-    finally {
-        $timer.Stop()
-        $process.Dispose()
+    $streams = Invoke-BoundedProcess -StartInfo $start -TimeoutSeconds $TimeoutSeconds `
+        -DeadlineTimer $DeadlineTimer -StdoutLimit 1MB -StderrLimit 1MB `
+        -StartFailureMessage "ChildStartFailed: '$FilePath'" `
+        -TimeoutMessage "ChildTimeout: '$FilePath' exceeded $TimeoutSeconds seconds"
+    return [pscustomobject]@{
+        ExitCode = $streams.ExitCode
+        Stdout = $streams.Stdout
+        Stderr = $streams.Stderr
+        StdoutTruncated = $streams.StdoutTruncated
+        StderrTruncated = $streams.StderrTruncated
+        DurationMilliseconds = $streams.DurationMilliseconds
+        Interactive = [bool]$Interactive
     }
 }
-
 function Invoke-BundledCurrentScript {
     [CmdletBinding()]
     param(
@@ -300,11 +299,13 @@ function Invoke-BundledCurrentScript {
         }
     }
 
+    $deadline = [Diagnostics.Stopwatch]::StartNew()
     $timeout = Get-BundledTimeoutSeconds $Request
     $download = Get-BundledDownload -Uri $Uri `
         -Directory (Get-BundledTemporaryDirectory $Request) `
         -MaximumBytes $Script:MaximumScriptBytes -TimeoutSeconds $timeout `
-        -Extension '.ps1'
+        -Extension '.ps1' -DeadlineTimer $deadline
+    $primaryError = $null
     try {
         $hostArguments = @('-NoProfile')
         if (-not $interactive) { $hostArguments += '-NonInteractive' }
@@ -312,7 +313,7 @@ function Invoke-BundledCurrentScript {
         $hostArguments += $arguments
         $result = Invoke-BundledProcess -FilePath (Get-CurrentPowerShellPath) `
             -ArgumentList $hostArguments -Interactive:$interactive `
-            -TimeoutSeconds $timeout
+            -TimeoutSeconds $timeout -DeadlineTimer $deadline
         $output = @{
             requestedUri = $download.RequestedUri
             finalUri = $download.FinalUri
@@ -334,9 +335,12 @@ function Invoke-BundledCurrentScript {
             Output = $output
         }
     }
+    catch { $primaryError = $_; throw }
     finally {
-        if ([IO.File]::Exists($download.Path)) {
-            [IO.File]::Delete($download.Path)
+        try { if ([IO.File]::Exists($download.Path)) { [IO.File]::Delete($download.Path) } }
+        catch {
+            if ($primaryError) { $primaryError.Exception.Data['DownloadCleanupError'] = $_.Exception.Message }
+            else { throw }
         }
     }
 }

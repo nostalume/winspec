@@ -22,21 +22,37 @@ winspec workflow <name> [-Spec spec] [-DryRun] [-Json]
 winspec merge <base> <incoming> [-Output path] [-Strategy auto|union|ours|theirs] [-Force]
 winspec providers [-ProviderPath roots] [-Json]
 winspec actions [spec] [-ProviderPath roots] [-Json]
-winspec sandbox [-Enter|-Exit|-List] [-Mode Mock|DryRun] [-Snapshot name]
 winspec rollback (-Last|-SequenceNumber n) [-DryRun]
 winspec help [command]
 ```
 
 Commands and options are case-insensitive. `-Providers` and `-ProviderPath`
-accept comma-separated values and may be repeated. Empty provider names are
-invalid. `--` ends WinSpec parsing and is valid only for `run`; every following
-token is forwarded as one literal argument. Unknown commands, options,
+accept comma-separated values and may be repeated. Items are trimmed and
+deduplicated case-insensitively; empty items are invalid. All other options,
+including switches, may occur only once. Explicit empty path/name values fail;
+they do not select a default. A missing value before another known option is
+reported as `MissingOptionValue`. Use a path prefix such as `./-Json` for a
+file whose name is also an option.
+`--` ends WinSpec parsing and is valid only for `run`; every following
+token is forwarded as one literal argument and cannot enable WinSpec output or
+help modes. Even an empty `--` is rejected on commands other than `run`.
+Unknown commands, options,
 combinations, and extra operands fail before effects.
 
-`-TimeoutSeconds` defaults to 300 and accepts 1–3600. `-Json` reserves stdout for
-one result document. It is incompatible with interactive execution. `-Verbose`
-and `-Debug` are accepted common switches; their diagnostic streams are not part
-of the JSON document.
+`-TimeoutSeconds` defaults to 300 and accepts integers 1–3600. It is valid on
+`capture`, `status`, `diff`, `apply`, `run`, and `workflow`, and on `validate`
+only with `-PreviewActions`. It bounds supported process/remote operations,
+not an entire Workflow or every synchronous core Windows API.
+`-Json` reserves stdout for one result document, including Help, and is
+incompatible with interactive execution. Controlled diagnostics are included in
+the JSON document; stderr is empty on these CLI success and failure paths.
+
+`sandbox` and its `-Enter`, `-Exit`, `-List`, `-Mode`, and `-Snapshot` options
+are retired. The ineffective `-Verbose` and `-Debug` options are also retired.
+They fail with exit 2 rather than executing or forwarding to another command.
+Existing sandbox files are not read as execution policy, modified, or deleted
+by the CLI. Use explicit command preview contracts instead of a global
+simulation mode.
 
 | Command | Operand and selection | Options and defaults |
 | --- | --- | --- |
@@ -47,10 +63,9 @@ of the JSON document.
 | `apply` | optional desired spec | `-Providers`; `-ProviderPath`; `-DryRun`; `-Checkpoint` |
 | `run` | exactly one Action name, `-Provider` name, local path, or HTTP(S) URI | configured name uses `-Spec`; direct provider uses empty `With`; local may use `-Interactive`; remote may use `-Sha256`; accepts `--` |
 | `workflow` | exactly one Workflow name | optional `-Spec`; `-DryRun` |
-| `merge` | base and incoming specs | `-Output` defaults to stdout; strategy defaults `auto`; existing output needs `-Force` |
+| `merge` | base and incoming specs | no `-Output` means no file is written (human summary or JSON result); strategy defaults `auto`; existing output needs `-Force` |
 | `providers` | no operand | `-ProviderPath` adds discovery roots |
 | `actions` | optional spec | `-ProviderPath`; lists configured Action bindings without returning `With` or executing providers |
-| `sandbox` | no operand | exactly one of `-Enter`, `-Exit`, `-List`; mode defaults `Mock`; snapshot defaults `default` |
 | `rollback` | no operand | exactly one of `-Last` or positive `-SequenceNumber`; optional `-DryRun` |
 
 `-Spec` is valid only for a named Action or Workflow. Singular `-Provider` is
@@ -61,7 +76,8 @@ is valid only for a direct local Script; a named local Script stores it in
 `With`. `-Providers` applies only to State commands. `-ProviderPath` applies to
 `capture`, `status`, `validate`, `diff`, `apply`, `run`, `workflow`, `providers`,
 and `actions`. `-Checkpoint` applies only to `apply`; a Workflow stores its
-checkpoint request in the spec.
+checkpoint request in the spec. Option applicability is checked by presence,
+even when its explicit value equals a default (for example `-Strategy auto`).
 
 `run -Provider` cannot be combined with a positional target, `-Spec`,
 `-Interactive`, or `-Sha256`. It accepts only an Action provider. A provider name
@@ -72,6 +88,39 @@ An omitted spec resolves to
 `%USERPROFILE%\.config\winspec\.winspec.psd1`, then `.winspec.json`. If both
 exist, WinSpec returns `AmbiguousDefaultSpec`. It does not walk parent
 directories. An omitted capture output is the PSD1 default path.
+
+## Option reference
+
+`[options]` in command Help means only that command's listed options. Angle
+brackets name required values; square brackets mark optional forms. All options
+are checked by presence, not truthiness or whether a value differs from a default.
+The `validate` timeout additionally requires `-PreviewActions`.
+
+<!-- BEGIN GENERATED CLI OPTIONS: tools/update-help-reference.ps1 -->
+The following inventory is generated from the CLI option/command records.
+Only listed commands accept each option; `-Help` is the separate help-only form.
+
+| Option | Value / repetition | Commands | Meaning and default |
+| --- | --- | --- | --- |
+| `-Json` | Switch; once | capture, status, validate, diff, apply, run, workflow, merge, providers, actions, rollback, help | Return one result document on stdout; no progress/log lines are added. Default: human-readable output. Incompatible with Interactive. |
+| `-Help` | Switch; once | all commands (help-only) | Show command help without reading a specification or starting a provider. Use without operands or execution options; Json is allowed. |
+| `-DryRun` | Switch; once | apply, run, workflow, rollback | Do not request the actual apply/run/restore operation. Provider previews may execute trusted code; Script previews are opaque. Default: actual operation. |
+| `-PreviewActions` | Switch; once | validate | Explicitly run declared external Action-provider previews and report coverage. Default: structural validation only. |
+| `-Spec <path>` | String; once | run, workflow | Select the specification for a named Action or Workflow. Default: user specification; not valid for a direct provider or Script. |
+| `-Provider <name>` | String; once | run | Select one Action implementation with empty With configuration. Cannot be combined with a target, Spec, Interactive or Sha256. |
+| `-Providers <names>` | List; repeatable | capture, status, diff, apply | Select State providers by name; comma-separated/repeatable. Empty items fail and duplicates are removed. This does not select Actions. |
+| `-ProviderPath <roots>` | List; repeatable | capture, status, validate, diff, apply, run, workflow, providers, actions | Add static package discovery roots; comma-separated/repeatable. Relative roots resolve from the current directory. Does not execute or install a provider. |
+| `-Against <path>` | String; once | diff | Compare the desired spec with this observed/reference spec instead of the current machine. Default: live comparison. |
+| `-Output <path>` | String; once | merge | Publish the merged data-only specification at this path. Default: return a merge result without writing a file. |
+| `-Strategy <name>` | String; once | merge | auto, union, ours or theirs; default auto. auto reports scalar/array conflicts, ours/theirs choose a side, union combines arrays and otherwise chooses incoming values. |
+| `-Force` | Switch; once | capture, merge | Allow replacing the selected capture/merge output file. Does not bypass validation, trust, privileges or unresolved merge conflicts. Default: refuse existing output. |
+| `-Checkpoint` | Switch; once | apply | Request one Windows restore point before a changing apply. Default: no checkpoint. Requires already-available System Restore and privileges. |
+| `-Interactive` | Switch; once | run | Direct local Script only; inherit its terminal. Cannot use Json or DryRun. Named Scripts declare With.Interactive instead. Default: captured noninteractive execution. |
+| `-Sha256 <64 hex chars>` | String; once | run | Direct remote Script only; exactly 64 hexadecimal characters. Verify received bytes against this independently obtained pin. Named Scripts declare With.Sha256. Required for HTTP; optional for HTTPS. |
+| `-TimeoutSeconds <int>` | Integer; once | capture, status, validate, diff, apply, run, workflow | 1..3600, default 300; per managed operation, not a whole Workflow or every synchronous Windows API. |
+| `-Last` | Switch; once | rollback | Choose the latest available Windows restore point during actual rollback. Exactly one of Last or SequenceNumber is required; no default target. |
+| `-SequenceNumber <positive-int>` | Integer; once | rollback | Choose this positive Windows restore-point sequence. Exactly one of Last or SequenceNumber is required; no default target. |
+<!-- END GENERATED CLI OPTIONS -->
 
 ## Specification data model
 
@@ -176,12 +225,16 @@ not executed:
 }
 ```
 
-`-PreviewActions` changes `mode` to `ActionPreview` and selects configured Action
+`-PreviewActions` changes `mode` to `ActionPreview` and selects configured external Action
 providers that declare `preview`, in case-insensitive Action-name order. A
 successful `Planned` response maps to `Valid`; a provider response of `Failed`
 maps to `Invalid`, makes `valid` false, and exits 2. A provider without preview is
 `Unavailable` and is not started. A provider process/protocol failure or timeout
 fails the command with exit 3 or 4 and preserves the subject and diagnostic.
+
+Core Script configuration shape is checked structurally, but source-file existence
+and runtime dependencies are not checked by validate, including with PreviewActions.
+Use local Script run -DryRun for source existence; remote preview stays offline.
 
 The complete subject vocabulary is `NotRun`, `Valid`, `Unavailable`, and
 `Invalid`. External State configuration remains `NotRun`; protocol version 1 has
@@ -265,6 +318,14 @@ steps, arbitrary commands, and implicit rollback are invalid.
 ## State operations
 
 `capture` observes selected State and atomically publishes a data-only spec.
+
+Capture, merge with `-Output`, and Workflow Capture share one file-publication
+boundary. They write a temporary sibling, then atomically move it to a new path
+or, with explicit Force, replace an existing file. Without Force, a destination
+created concurrently is not replaced. No delete-and-retry fallback is used;
+permissions, locks or concurrent changes can still cause failure. Force is an
+overwrite authorization, not a validation bypass or a durability guarantee.
+
 `status` observes without publication. `diff` compares desired State with the
 machine or `-Against`; it returns exit 1 when different. `apply` captures and
 compares first, then converges only selected providers. If already equal it
@@ -283,6 +344,37 @@ the only multi-step surface. No command elevates, enables System Restore, retrie
 an uncertain effect, or automatically rolls back.
 
 ## Result document and exits
+
+Without `-Json`, WinSpec renders a human projection rather than an internal JSON
+dump. Final headers use `OK`, `PARTIAL`, `PLAN`, `DIFF`, `NO-WORK`, or `FAIL`.
+`PARTIAL` describes incomplete provider-validation coverage, not runtime success;
+`NO-WORK` distinguishes an empty selection from a comparison that found no drift.
+These tokens do not extend the machine status vocabulary or change exit codes.
+
+Successful summaries, lists, plans and labeled child stdout use stdout. Failure
+summaries and diagnostics, labeled child/provider stderr, and terminal-only
+`WAIT` events use stderr. Child stderr alone does not turn exit 0 into failure.
+Workflow failures show one final step table on stderr; skipped identities are
+projected from the already-loaded steps, without adding fields to JSON receipts.
+
+Human child display retains at most 8 KiB per stream (head/tail halves), result
+tables at most 100 rows, and value cells at most 256 characters. Diagnostics are
+limited to 100 items per command and 4 KiB per message. Explicit notices identify
+display omissions separately from capture loss. `-Json` retains the existing
+captured data; it cannot recover bytes already discarded by the runtime. Terminal
+control characters are escaped. URI credentials, query and fragment, argument
+vectors and `With` configuration are not displayed as default metadata; arbitrary
+child/provider payloads should still be treated as potentially sensitive.
+
+For noninteractive captured processes, `WAIT` reports the actual stage, then
+elapsed time after one second and at most every two seconds. It is disabled for
+JSON, redirected streams and interactive Script children. Synchronous HTTP/core
+Windows calls report entry into their stage, not periodic elapsed events while
+blocked; no new scheduler, deadline or progress percentage is implied.
+
+Apply success means providers reported success; no post-apply verification is
+performed. Rollback success means Windows accepted the request, not that system
+recovery completed. DryRun rollback does not resolve a restore point.
 
 With `-Json`, stdout is exactly one UTF-8 JSON object:
 
@@ -343,11 +435,30 @@ failures; it is not a security sandbox.
 
 ## Command Help
 
-`winspec help` lists every command with a one-line purpose. Both
-`winspec help <command>` and `winspec <command> -Help` show the command purpose,
-all supported selection forms, effects, default selection rule, a minimal
-example, and documentation pointers. Help performs no spec load, provider
-discovery, or provider execution.
+`winspec help` groups all twelve commands into Inspect, Change, Files, Recovery
+and Help, then shows safe starting commands and the default-spec rule. Both
+`winspec help <command>` and `winspec <command> -Help` show the same human page:
+Usage, Selection, typed Options with meaning/defaults/conflicts, Effects and
+limits, Examples, Exit, and resolved packaged documentation paths. `run` also
+explains literal argument forwarding. Help performs no spec load, provider
+discovery or execution, even when a default spec or catalog is broken/missing.
+Use `-Help` without operands or execution options; `-Json` may accompany it.
+
+`help [command] -Json` and `<command> -Help -Json` return a schema-version-1
+command result with `results.help`. It contains `topic` (empty string for the inventory),
+`summary`, `usage` (array), `options` (array of `name`, `valueType`, `repeatable`),
+`defaults.selection`, `effects`, `examples` (array), and `related` (array of
+repository documentation references). The top-level inventory additionally
+contains `commands`, an array of `name` and `summary`. The option value types
+are `Switch`, `String`, `Integer`, and `List`. These fields describe the static
+command contract, not provider-owned configuration or runtime readiness.
+Unknown/retired topics return one Failed result with exit 2. Existing Help JSON
+fields and prose values are retained for compatibility; expanded human prose
+does not add fields to that document. Option legality, type, repetition and
+human descriptions belong to the same command/option inventory as admission.
+Strategy/timeout defaults are read from their option records. The option table
+above is generated from those literal records without executing the CLI; its
+maintenance command is documented in [Development](development.md).
 
 ## Bundled Action providers
 

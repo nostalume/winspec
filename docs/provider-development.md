@@ -285,9 +285,24 @@ stderr with that process failure. It does not reinterpret either failure as
 success.
 
 Protocol request and response stdout are limited to 4 MiB. Provider stderr is
-limited to 1 MiB. WinSpec terminates the provider process tree when the timeout
-expires. A detached or separately elevated descendant can escape that immediate
-receipt and remains the provider's responsibility.
+limited to 1 MiB. On timeout or transport/response-validation failure, WinSpec
+attempts to stop its owned provider tree using process handles and birth identity.
+Detached, unqueryable or separately elevated descendants can escape that immediate
+receipt and remain the provider's responsibility.
+
+Request writing and both output streams run concurrently under one monotonic
+operation budget, including process startup, final draining and response parsing.
+EOF alone does not mean the process exited. Truncation stops retaining bytes, not
+draining the pipe. Bundled download and child execution share their operation
+budget; the parent provider deadline remains authoritative over the whole call.
+Cleanup uses bounded waits and preserves the original error alongside any cleanup
+diagnostic. It cannot guarantee cancellation of all synchronous OS calls or
+detached/elevated descendants, and is not privilege isolation.
+
+Keep provider-owned children joined to their operation; do not interpret bounded
+capture as a guarantee of whole-tree peak memory, cleanup latency or cancellation.
+Neither this protocol nor the T4 regression checkpoint adds fields, changes the
+seconds-based timeout request, or permits in-process provider imports.
 
 ## Minimal Action provider
 

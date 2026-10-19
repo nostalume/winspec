@@ -3,7 +3,6 @@
 # Import dependent modules
 Import-Module (Join-Path $PSScriptRoot "..\schema.psm1")
 Import-Module (Join-Path $PSScriptRoot "registry-maps.psm1")
-Import-Module (Join-Path $PSScriptRoot "..\sandbox.psm1") -ErrorAction SilentlyContinue
 
 function Get-ProviderInfo {
     return @{
@@ -263,88 +262,6 @@ function Compare-RegistryState {
     return $differences
 }
 
-function Invoke-RegistrySandbox {
-    <#
-    .SYNOPSIS
-        Applies registry state changes in sandbox mode.
-
-    .DESCRIPTION
-        Simulates registry changes in the sandbox context without touching
-        the real system registry.
-
-    .PARAMETER Desired
-        Desired registry state hashtable.
-
-    .OUTPUTS
-        Hashtable with Status and Changed arrays.
-    #>
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $true)]
-        [hashtable]$Desired
-    )
-
-    if (-not (Test-SandboxActive)) {
-        throw "Sandbox not active"
-    }
-
-    $providerName = "Registry"
-
-    $results = @{
-        Status = "Success"
-        Changed = @()
-    }
-
-    Update-SandboxState $providerName {
-        param($state)
-
-        if (-not $state) {
-            $state = @{}
-        }
-
-        foreach ($category in $Desired.Keys) {
-
-            if (-not $state.ContainsKey($category)) {
-                $state[$category] = @{}
-            }
-
-            foreach ($key in $Desired[$category].Keys) {
-
-                $oldValue = $state[$category][$key]
-                $newValue = $Desired[$category][$key]
-
-                if ($oldValue -ne $newValue) {
-
-                    $results.Changed += @{
-                        Category = $category
-                        Key = $key
-                        OldValue = $oldValue
-                        NewValue = $newValue
-                    }
-
-                    $state[$category][$key] = $newValue
-                }
-            }
-        }
-
-        return $state
-    }
-    # record change in sandbox history
-    Update-SandboxChanges "Registry" "Apply" $results
-
-    return $results
-}
-
-function Invoke-RegistrySandboxApply {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $true)]
-        [hashtable]$Desired
-    )
-
-    return Invoke-RegistrySandbox -Desired $Desired
-}
-
 Export-ModuleMember -Function @(
     "Get-ProviderInfo"
     "Get-RegistryValue"
@@ -355,6 +272,4 @@ Export-ModuleMember -Function @(
     "Set-RegistryState"
     "Export-RegistryState"
     "Compare-RegistryState"
-    "Invoke-RegistrySandbox"
-    "Invoke-RegistrySandboxApply"
 )

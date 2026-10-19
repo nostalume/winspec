@@ -5,8 +5,12 @@ param(
     [Parameter(Mandatory)][string]$RequestLogPath,
     [ValidateRange(1, 20)][int]$RequestCount = 1,
     [ValidateRange(0, 10)][int]$RedirectCount = 0,
-    [switch]$OmitContentLength
+    [switch]$OmitContentLength,
+    [int]$ChunkDelayMilliseconds = 0,
+    [int]$ChunkBytes = [int]::MaxValue
 )
+
+if ($ChunkDelayMilliseconds -and -not $PSBoundParameters.ContainsKey('ChunkBytes')) { $ChunkBytes = 1024 }
 
 $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, $Port)
 try {
@@ -41,7 +45,11 @@ try {
                 $lengthHeader + "Connection: close`r`n`r`n"
                 $headerBytes = [Text.Encoding]::ASCII.GetBytes($header)
                 $stream.Write($headerBytes, 0, $headerBytes.Length)
-                $stream.Write($body, 0, $body.Length)
+                for ($offset = 0; $offset -lt $body.Length; $offset += $ChunkBytes) {
+                    $stream.Write($body, $offset, [Math]::Min($ChunkBytes, $body.Length - $offset))
+                    $stream.Flush()
+                    if ($ChunkDelayMilliseconds) { Start-Sleep -Milliseconds $ChunkDelayMilliseconds }
+                }
             }
             $stream.Flush()
             $reader.Dispose()

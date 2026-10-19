@@ -1,0 +1,81 @@
+{
+  "topic": "",
+  "summary": "Show the command inventory or detailed help for one command.",
+  "usage": [
+    "winspec help [command]",
+    "winspec <command> -Help"
+  ],
+  "options": [
+    {
+      "name": "-json",
+      "valueType": "Switch",
+      "repeatable": false
+    },
+    {
+      "name": "-help",
+      "valueType": "Switch",
+      "repeatable": false
+    }
+  ],
+  "defaults": {
+    "selection": "Shows the complete command inventory."
+  },
+  "effects": "Writes documentation to stdout without loading a spec or provider catalog.",
+  "examples": [
+    "winspec help run"
+  ],
+  "related": [
+    "docs/api.md",
+    "docs/usage.md"
+  ],
+  "commands": [
+    {
+      "name": "capture",
+      "summary": "Observe selected State and publish it as a data-only specification."
+    },
+    {
+      "name": "status",
+      "summary": "Observe selected State without publishing or changing it."
+    },
+    {
+      "name": "validate",
+      "summary": "Check a specification and report provider-validation coverage."
+    },
+    {
+      "name": "diff",
+      "summary": "Compare declarative State only; Actions are never part of a diff."
+    },
+    {
+      "name": "apply",
+      "summary": "Converge selected declarative State without running Actions."
+    },
+    {
+      "name": "run",
+      "summary": "Execute or preview exactly one named, direct-provider, or Script Action."
+    },
+    {
+      "name": "workflow",
+      "summary": "Execute or preview one configured ordered multi-step Workflow."
+    },
+    {
+      "name": "merge",
+      "summary": "Combine two data-only specifications without touching machine State."
+    },
+    {
+      "name": "providers",
+      "summary": "List discovered provider implementations without reading configured Actions."
+    },
+    {
+      "name": "actions",
+      "summary": "List configured Action instances and their provider bindings."
+    },
+    {
+      "name": "rollback",
+      "summary": "Preview or request one explicit Windows restore operation."
+    },
+    {
+      "name": "help",
+      "summary": "Show the command inventory or detailed help for one command."
+    }
+  ]
+}

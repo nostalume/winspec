@@ -1,0 +1,2 @@
+Step 1 / hello stdout:
+  Hello from controlled fixture

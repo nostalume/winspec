@@ -1,0 +1,55 @@
+{
+  "topic": "apply",
+  "summary": "Converge selected declarative State without running Actions.",
+  "usage": [
+    "winspec apply [spec] [-Providers names] [-ProviderPath roots] [-DryRun] [-Checkpoint] [-Json]"
+  ],
+  "options": [
+    {
+      "name": "-providers",
+      "valueType": "List",
+      "repeatable": true
+    },
+    {
+      "name": "-providerpath",
+      "valueType": "List",
+      "repeatable": true
+    },
+    {
+      "name": "-dryrun",
+      "valueType": "Switch",
+      "repeatable": false
+    },
+    {
+      "name": "-checkpoint",
+      "valueType": "Switch",
+      "repeatable": false
+    },
+    {
+      "name": "-timeoutseconds",
+      "valueType": "Integer",
+      "repeatable": false
+    },
+    {
+      "name": "-json",
+      "valueType": "Switch",
+      "repeatable": false
+    },
+    {
+      "name": "-help",
+      "valueType": "Switch",
+      "repeatable": false
+    }
+  ],
+  "defaults": {
+    "selection": "Uses State sections in the selected/default spec."
+  },
+  "effects": "May change selected machine State; -DryRun only observes and compares.",
+  "examples": [
+    "winspec apply .\\machine.winspec.psd1 -DryRun"
+  ],
+  "related": [
+    "docs/api.md",
+    "docs/usage.md"
+  ]
+}

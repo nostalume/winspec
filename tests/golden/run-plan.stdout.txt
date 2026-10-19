@@ -1,0 +1,5 @@
+PLAN run hello [Script] -- opaque preview; Script was not executed
+Spec: <SPEC>
+Source: <SCRIPT>
+Checked: Action selection and local file existence
+Not checked: Script contents, runtime dependencies, or internal changes

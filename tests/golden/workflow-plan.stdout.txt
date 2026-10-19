@@ -1,0 +1,8 @@
+PLAN workflow setup -- 3 steps planned; no steps executed
+Spec: <SPEC>
+Step Operation Identity Result Opaque
+1 Run hello Planned yes
+2 Run broken Planned yes
+3 Run hello Planned yes
+Checkpoint: not created (DryRun)
+Scope: previews are not an OS security sandbox.

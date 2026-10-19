@@ -44,26 +44,20 @@ jobs:
 
     - name: Run integration tests
       run: |
-        $config = New-PesterConfiguration
-        $config.Run.Path = "./tests"
-        $config.Output.Verbosity = "Detailed"
-        $config.Run.Exit = $true
-        $config.TestResult.Enabled = $true
-        $config.TestResult.OutputPath = "./test-results.xml"
-        $config.TestResult.OutputFormat = "NUnit3"
-
-        Invoke-Pester -Configuration $config
+        & ./tools/test.ps1 -Profile Full -ResultPath (Join-Path $env:GITHUB_WORKSPACE 'test-results.json')
 
     - name: Upload test results
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
       if: always()
       with:
         name: test-results-${{ matrix.shell }}
-        path: ./test-results.xml
+        path: |
+          ./test-results.xml
+          ./test-results.json
 
     - name: Publish test results
       uses: dorny/test-reporter@a43b3a5f7366b97d083190328d2c652e1a8b6aa2 # v3
-      if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+      if: ${{ !cancelled() && hashFiles('test-results.xml') != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
       with:
         name: Test Results (${{ matrix.shell }})
         path: ./test-results.xml

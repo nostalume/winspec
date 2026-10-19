@@ -1,0 +1,50 @@
+{
+  "topic": "capture",
+  "summary": "Observe selected State and publish it as a data-only specification.",
+  "usage": [
+    "winspec capture [output] [-Providers names] [-ProviderPath roots] [-Force] [-Json]"
+  ],
+  "options": [
+    {
+      "name": "-providers",
+      "valueType": "List",
+      "repeatable": true
+    },
+    {
+      "name": "-providerpath",
+      "valueType": "List",
+      "repeatable": true
+    },
+    {
+      "name": "-force",
+      "valueType": "Switch",
+      "repeatable": false
+    },
+    {
+      "name": "-timeoutseconds",
+      "valueType": "Integer",
+      "repeatable": false
+    },
+    {
+      "name": "-json",
+      "valueType": "Switch",
+      "repeatable": false
+    },
+    {
+      "name": "-help",
+      "valueType": "Switch",
+      "repeatable": false
+    }
+  ],
+  "defaults": {
+    "selection": "Observes core State and writes the user .winspec.psd1 path."
+  },
+  "effects": "Reads machine State and writes one specification; it never applies State or runs Actions.",
+  "examples": [
+    "winspec capture .\\observed.winspec.psd1 -Providers Registry"
+  ],
+  "related": [
+    "docs/api.md",
+    "docs/usage.md"
+  ]
+}

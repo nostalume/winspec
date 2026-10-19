@@ -1,0 +1,35 @@
+{
+  "topic": "providers",
+  "summary": "List discovered provider implementations without reading configured Actions.",
+  "usage": [
+    "winspec providers [-ProviderPath roots] [-Json]"
+  ],
+  "options": [
+    {
+      "name": "-providerpath",
+      "valueType": "List",
+      "repeatable": true
+    },
+    {
+      "name": "-json",
+      "valueType": "Switch",
+      "repeatable": false
+    },
+    {
+      "name": "-help",
+      "valueType": "Switch",
+      "repeatable": false
+    }
+  ],
+  "defaults": {
+    "selection": "Includes core, bundled, user, and explicitly rooted providers."
+  },
+  "effects": "Reads static manifests only and never starts a provider.",
+  "examples": [
+    "winspec providers -Json"
+  ],
+  "related": [
+    "docs/api.md",
+    "docs/usage.md"
+  ]
+}

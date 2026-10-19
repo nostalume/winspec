@@ -1,0 +1,8 @@
+FAIL run broken [Script] -- child exited unsuccessfully
+Spec: <SPEC>
+Source: <BROKEN>
+Child exit: 7
+WinSpec exit: 3
+Child stderr:
+  fixture failure: missing input
+Recovery: inspect the Script and its inputs before retrying; external effects may remain.

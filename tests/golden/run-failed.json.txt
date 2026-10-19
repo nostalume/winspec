@@ -1,0 +1,1 @@
+{"command":"run","diagnostics":[],"results":{"actions":[{"name":"broken","result":{"Arguments":[],"DurationMilliseconds":0,"ExitCode":7,"Interactive":false,"Interpreter":"<HOST>","Source":"<BROKEN>","Status":"Failed","Stderr":"fixture failure: missing input\n","StderrTruncated":false,"Stdout":"","StdoutTruncated":false}}]},"schemaVersion":1,"status":"Failed"}

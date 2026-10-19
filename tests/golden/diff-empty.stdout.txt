@@ -1,0 +1,3 @@
+NO-WORK diff -- no State sections selected
+Spec: <EMPTY>
+Scope: no State comparison was performed.

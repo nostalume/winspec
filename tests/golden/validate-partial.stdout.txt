@@ -1,0 +1,9 @@
+PARTIAL validate -- structural checks passed; provider validation incomplete
+Spec: <PARTIAL>
+Mode: Structural
+Provider checks: 0 valid, 1 not run, 0 unavailable, 0 invalid
+Subject Provider Check
+Actions.activate MicrosoftActivation NotRun
+Scope: runtime dependencies and successful execution are not proven.
+Optional: winspec validate "<PARTIAL>" -PreviewActions
+          This starts trusted provider preview code.

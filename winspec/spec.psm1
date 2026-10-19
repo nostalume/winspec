@@ -76,21 +76,25 @@ function Assert-JsonObjectKeys {
             [char]::IsWhiteSpace($script:JsonText[$script:JsonIndex])) { $script:JsonIndex++ }
     }
     function Read-JsonString {
+        param([switch]$AsKey)
         if ($script:JsonText[$script:JsonIndex] -ne '"') {
             throw "InvalidJson: expected string at offset $script:JsonIndex"
         }
         $start = $script:JsonIndex
         $script:JsonIndex++
-        while ($script:JsonIndex -lt $script:JsonText.Length) {
-            $ch = $script:JsonText[$script:JsonIndex]
-            if ($ch -eq '\') { $script:JsonIndex += 2; continue }
-            $script:JsonIndex++
-            if ($ch -eq '"') {
-                $token = $script:JsonText.Substring($start, $script:JsonIndex - $start)
-                return ($token | ConvertFrom-Json)
-            }
+        while ($true) {
+            $quote = $script:JsonText.IndexOf('"', $script:JsonIndex)
+            if ($quote -lt 0) { throw "InvalidJson: unterminated string at offset $start" }
+            $slashes = 0
+            for ($i = $quote - 1; $i -gt $start -and $script:JsonText[$i] -eq '\'; $i--) { $slashes++ }
+            $script:JsonIndex = $quote + 1
+            if ($slashes % 2 -eq 0) { break }
         }
-        throw "InvalidJson: unterminated string at offset $start"
+        if ($AsKey) {
+            # Only keys need decoding for the duplicate-key guard. The full
+            # document parser remains the syntax/value admission owner.
+            return ($script:JsonText.Substring($start, $script:JsonIndex - $start) | ConvertFrom-Json)
+        }
     }
     function Read-JsonValue {
         param([int]$Depth)
@@ -108,7 +112,7 @@ function Assert-JsonObjectKeys {
             }
             while ($true) {
                 Skip-JsonWhitespace
-                $key = Read-JsonString
+                $key = Read-JsonString -AsKey
                 if (-not $keys.Add($key)) { throw "DuplicateKey: '$key'" }
                 Skip-JsonWhitespace
                 if ($script:JsonIndex -ge $script:JsonText.Length -or $script:JsonText[$script:JsonIndex] -ne ':') {
@@ -147,11 +151,14 @@ function Assert-JsonObjectKeys {
             -not [char]::IsWhiteSpace($script:JsonText[$script:JsonIndex])) { $script:JsonIndex++ }
     }
 
-    Read-JsonValue 0
-    Skip-JsonWhitespace
-    if ($script:JsonIndex -ne $script:JsonText.Length) {
-        throw "InvalidJson: extra content at offset $script:JsonIndex"
+    try {
+        Read-JsonValue 0
+        Skip-JsonWhitespace
+        if ($script:JsonIndex -ne $script:JsonText.Length) {
+            throw "InvalidJson: extra content at offset $script:JsonIndex"
+        }
     }
+    finally { $script:JsonText = $null; $script:JsonIndex = 0 }
 }
 
 function ConvertTo-PowerShellValue {
@@ -367,7 +374,9 @@ function Save-Configuration {
     try {
         $encoding = New-Object Text.UTF8Encoding($false)
         [IO.File]::WriteAllText($tempPath, $content + [Environment]::NewLine, $encoding)
-        if ([IO.File]::Exists($fullPath)) { [IO.File]::Replace($tempPath, $fullPath, $null) }
+        if ($Force -and [IO.File]::Exists($fullPath)) {
+            [IO.File]::Replace($tempPath, $fullPath, [NullString]::Value)
+        }
         else { [IO.File]::Move($tempPath, $fullPath) }
     } finally {
         if ([IO.File]::Exists($tempPath)) { [IO.File]::Delete($tempPath) }

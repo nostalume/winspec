@@ -161,7 +161,8 @@ function Get-WinSpecObservedState {
         [Parameter(Mandatory)][object[]]$Catalog,
         [hashtable]$Spec,
         [string[]]$Providers,
-        [ValidateRange(1, 3600)][int]$TimeoutSeconds = 300
+        [ValidateRange(1, 3600)][int]$TimeoutSeconds = 300,
+        [scriptblock]$Progress
     )
     $specScoped = $PSBoundParameters.ContainsKey('Spec')
     $selected = Resolve-WinSpecStateProviders -Catalog $Catalog `
@@ -171,6 +172,7 @@ function Get-WinSpecObservedState {
     $core = @($selected | Where-Object Execution -EQ 'Core' |
             ForEach-Object Name)
     if ($core.Count -gt 0) {
+        if ($Progress) { $null = & $Progress 'observing core State' 0 $TimeoutSeconds }
         $captured = Get-SystemState -Providers $core
         foreach ($key in $captured.Keys) { $result[$key] = $captured[$key] }
     }
@@ -186,7 +188,7 @@ function Get-WinSpecObservedState {
             -Operation capture -RequestInput @{
             configuration = $configuration
             executionPolicy = @{ timeoutSeconds = $TimeoutSeconds }
-        } -TimeoutSeconds $TimeoutSeconds
+        } -TimeoutSeconds $TimeoutSeconds -Progress $Progress
         if ($response.Status -eq 'Failed') {
             throw "ProviderFailed: '$($provider.Name)'"
         }
@@ -205,14 +207,15 @@ function Compare-WinSpecState {
         [Parameter(Mandatory)][object[]]$Catalog,
         [hashtable]$Against,
         [string[]]$Providers,
-        [ValidateRange(1, 3600)][int]$TimeoutSeconds = 300
+        [ValidateRange(1, 3600)][int]$TimeoutSeconds = 300,
+        [scriptblock]$Progress
     )
     $selected = Resolve-WinSpecStateProviders -Catalog $Catalog `
         -Providers $Providers -Spec $Spec -SpecScoped
     Assert-WinSpecStateCapability $selected 'compare'
     if ($null -eq $Against) {
         $Against = Get-WinSpecObservedState -Catalog $Catalog -Spec $Spec `
-            -Providers @($selected.Name) -TimeoutSeconds $TimeoutSeconds
+            -Providers @($selected.Name) -TimeoutSeconds $TimeoutSeconds -Progress $Progress
     }
     $items = @()
     foreach ($provider in $selected) {
@@ -226,6 +229,7 @@ function Compare-WinSpecState {
         if ($provider.Execution -eq 'Core') {
             $manager = Get-Managers | Where-Object Name -ieq $provider.Name
             try {
+                if ($Progress) { $null = & $Progress "comparing $($provider.Name) State" 0 $TimeoutSeconds }
                 $differences = @(Compare-ProviderState $manager `
                         $Spec[$provider.Name] $actual)
             }
@@ -246,7 +250,7 @@ function Compare-WinSpecState {
                 configuration = $Spec[$provider.Name]
                 observed = $actual
                 executionPolicy = @{ timeoutSeconds = $TimeoutSeconds }
-            } -TimeoutSeconds $TimeoutSeconds
+            } -TimeoutSeconds $TimeoutSeconds -Progress $Progress
             if ($response.Status -eq 'Failed') {
                 throw "ProviderFailed: '$($provider.Name)' compare"
             }
@@ -277,7 +281,8 @@ function Invoke-WinSpecStateApply {
         [Parameter(Mandatory)][object[]]$Catalog,
         [string[]]$Providers,
         [switch]$DryRun,
-        [ValidateRange(1, 3600)][int]$TimeoutSeconds = 300
+        [ValidateRange(1, 3600)][int]$TimeoutSeconds = 300,
+        [scriptblock]$Progress
     )
     $selected = Resolve-WinSpecStateProviders -Catalog $Catalog `
         -Providers $Providers -Spec $Spec -SpecScoped
@@ -289,6 +294,7 @@ function Invoke-WinSpecStateApply {
             $manager = Get-Managers | Where-Object Name -ieq $provider.Name
             $common = if ($DryRun) { @{ WhatIf = $true } } else { @{} }
             try {
+                if ($Progress) { $null = & $Progress "applying $($provider.Name) State" 0 $TimeoutSeconds }
                 $value = Invoke-Manager $manager $Spec $common
                 $coreResult = ConvertTo-WinSpecCoreResult `
                     -ProviderName $provider.Name -Value $value
@@ -318,7 +324,7 @@ function Invoke-WinSpecStateApply {
                 -Operation capture -RequestInput @{
                 configuration = $Spec[$provider.Name]
                 executionPolicy = @{ timeoutSeconds = $TimeoutSeconds }
-            } -TimeoutSeconds $TimeoutSeconds
+            } -TimeoutSeconds $TimeoutSeconds -Progress $Progress
             if ($capture.Status -eq 'Failed') {
                 throw "ProviderFailed: '$($provider.Name)' capture"
             }
@@ -330,7 +336,7 @@ function Invoke-WinSpecStateApply {
                 configuration = $Spec[$provider.Name]
                 observed = $capture.Output
                 executionPolicy = @{ timeoutSeconds = $TimeoutSeconds }
-            } -TimeoutSeconds $TimeoutSeconds
+            } -TimeoutSeconds $TimeoutSeconds -Progress $Progress
             if ($comparison.Status -eq 'Failed') {
                 throw "ProviderFailed: '$($provider.Name)' compare"
             }
@@ -362,7 +368,7 @@ function Invoke-WinSpecStateApply {
                 executionPolicy = @{
                     timeoutSeconds = $TimeoutSeconds
                 }
-            } -TimeoutSeconds $TimeoutSeconds
+            } -TimeoutSeconds $TimeoutSeconds -Progress $Progress
             $results += [pscustomobject]@{
                 Name = $provider.Name
                 Status = $response.Status

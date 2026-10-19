@@ -1,0 +1,1 @@
+{"command":"actions","diagnostics":[],"results":{"actions":[{"name":"broken","operations":["run","preview"],"origin":"Core","provider":"Script"},{"name":"hello","operations":["run","preview"],"origin":"Core","provider":"Script"}]},"schemaVersion":1,"status":"Succeeded"}

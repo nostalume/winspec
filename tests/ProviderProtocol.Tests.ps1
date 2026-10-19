@@ -12,7 +12,8 @@ BeforeAll {
         param(
             [Parameter(Mandatory)][string]$ContentPath,
             [ValidateRange(0, 10)][int]$RedirectCount = 0,
-            [switch]$OmitContentLength
+            [switch]$OmitContentLength,
+            [int]$ChunkDelayMilliseconds = 0
         )
 
         $reservation = [Net.Sockets.TcpListener]::new(
@@ -31,6 +32,7 @@ BeforeAll {
             '-RequestCount', [string]($RedirectCount + 1),
             '-RedirectCount', [string]$RedirectCount)
         if ($OmitContentLength) { $arguments += '-OmitContentLength' }
+        if ($ChunkDelayMilliseconds) { $arguments += @('-ChunkDelayMilliseconds', [string]$ChunkDelayMilliseconds) }
         $start = New-Object Diagnostics.ProcessStartInfo
         $start.FileName = Get-CurrentPowerShellPath
         $start.Arguments = (($arguments | ForEach-Object {
@@ -86,7 +88,7 @@ BeforeAll {
     }
 }
 
-Describe 'static provider catalog' {
+Describe 'static provider catalog' -Tag 'Boundary' {
     It 'ships a complete inert package for every bundled Action' {
         $catalog = @(Get-ProviderCatalog | Where-Object Origin -EQ 'Bundled')
 
@@ -194,7 +196,7 @@ Describe 'static provider catalog' {
     }
 }
 
-Describe 'external provider process protocol' {
+Describe 'external provider process protocol' -Tag 'Boundary' {
     It 'forwards the Action envelope and arguments without reshaping them' {
         $root = Join-Path $TestDrive 'action-runtime'
         $package = Join-Path $root 'record'
@@ -475,7 +477,7 @@ $request = [Console]::In.ReadToEnd() | ConvertFrom-Json
     }
 }
 
-Describe 'bundled current-script execution' {
+Describe 'bundled current-script execution' -Tag 'Boundary' {
     AfterEach {
         Stop-TestHttpServer $script:testServer
         $script:testServer = $null
@@ -488,7 +490,8 @@ Describe 'bundled current-script execution' {
         $bodyPath = Join-Path $TestDrive "$Name.ps1"
         $body = @"
 param([string]`$First, [string]`$Second)
-Write-Output "`$First|`$Second|`$PSCommandPath"
+[Console]::Out.WriteLine("`$First|`$Second|`$PSCommandPath")
+if ('$Name' -eq 'MicrosoftActivation') { [Console]::Out.Write(('x' * (1MB + 4096))) }
 exit $ExitCode
 "@
         [IO.File]::WriteAllText(
@@ -522,9 +525,13 @@ exit $ExitCode
         $response.Output.digestVerified | Should -BeFalse
         $response.Output.exitCode | Should -Be $ExitCode
         @($response.Output.arguments) | Should -Be @('configured', 'forwarded')
-        $parts = $response.Output.stdout.Trim() -split '[|]'
+        $parts = (($response.Output.stdout -split '\r?\n', 2)[0]).Trim() -split '[|]'
         $parts[0..1] | Should -Be @('configured', 'forwarded')
         Test-Path -LiteralPath $parts[2] | Should -BeFalse
+        if ($Name -eq 'MicrosoftActivation') {
+            $response.Output.stdout.Length | Should -Be 1MB
+            $response.Output.stdoutTruncated | Should -BeTrue
+        }
         @(Get-Content -LiteralPath $script:testServer.RequestLogPath).Count |
             Should -Be 2
     }
@@ -567,28 +574,6 @@ exit $ExitCode
             Should -Be 1
     }
 
-    It 'bounds child stdout without corrupting the provider response' {
-        $bodyPath = Join-Path $TestDrive 'large-output.ps1'
-        [IO.File]::WriteAllText(
-            $bodyPath, '[Console]::Out.Write((''x'' * (1MB + 4096)))',
-            (New-Object Text.UTF8Encoding($false)))
-        $script:testServer = Start-TestHttpServer $bodyPath
-        $provider = New-CopiedBundledProvider 'MicrosoftActivation'
-        $entryText = [IO.File]::ReadAllText($provider.EntryPoint)
-        [IO.File]::WriteAllText(
-            $provider.EntryPoint,
-            $entryText.Replace('https://get.activated.win/', $script:testServer.Uri),
-            (New-Object Text.UTF8Encoding($false)))
-
-        $response = Invoke-WinSpecAction `
-            -Action @{ Use = 'MicrosoftActivation' } -Provider $provider `
-            -BasePath $TestDrive -TimeoutSeconds 10
-
-        $response.Status | Should -Be 'Succeeded'
-        $response.Output.stdout.Length | Should -Be 1MB
-        $response.Output.stdoutTruncated | Should -BeTrue
-    }
-
     It 'deletes a partial file when the download exceeds its byte bound' {
         $bodyPath = Join-Path $TestDrive 'oversize.bin'
         [IO.File]::WriteAllBytes($bodyPath, (New-Object byte[] 1025))
@@ -605,7 +590,7 @@ exit $ExitCode
         @(Get-ChildItem -LiteralPath $downloadRoot -File).Count | Should -Be 0
     }
 
-    It 'removes the invocation temporary directory after timeout' {
+    It 'cleans a short bundled deadline without assuming the Script has entered' {
         $bodyPath = Join-Path $TestDrive 'slow.ps1'
         $pathRecord = Join-Path $TestDrive 'slow-path.txt'
         [IO.File]::WriteAllText(
@@ -623,6 +608,7 @@ Start-Sleep -Seconds 10
             $entryText.Replace('https://get.activated.win/', $script:testServer.Uri),
             (New-Object Text.UTF8Encoding($false)))
 
+        $before = @(Get-ChildItem -LiteralPath ([IO.Path]::GetTempPath()) -Directory -Filter 'winspec-provider-*').FullName
         $response = $null
         $timeoutMessage = $null
         try {
@@ -642,18 +628,82 @@ Start-Sleep -Seconds 10
         else {
             $timeoutMessage | Should -Match '^ProviderTimeout:'
         }
-        Test-Path -LiteralPath $pathRecord | Should -BeTrue
-        $downloadedPath = [IO.File]::ReadAllText($pathRecord)
-        Test-Path -LiteralPath $downloadedPath | Should -BeFalse
-        Test-Path -LiteralPath ([IO.Path]::GetDirectoryName($downloadedPath)) |
-            Should -BeFalse
+        # A total 3-second deadline can expire during provider/child startup.
+        # ProcessLifecycle.Tests proves cleanup after an observed native entry.
+        if (Test-Path -LiteralPath $pathRecord) {
+            $downloadedPath = [IO.File]::ReadAllText($pathRecord)
+            Test-Path -LiteralPath $downloadedPath | Should -BeFalse
+            Test-Path -LiteralPath ([IO.Path]::GetDirectoryName($downloadedPath)) | Should -BeFalse
+        }
+        $after = @(Get-ChildItem -LiteralPath ([IO.Path]::GetTempPath()) -Directory -Filter 'winspec-provider-*').FullName
+        @($after | Where-Object { $_ -notin $before }).Count | Should -Be 0
+    }
+
+    It 'bounds a slow streaming bundled download by total time, not each read' {
+        $bodyPath = Join-Path $TestDrive 'drip.bin'
+        [IO.File]::WriteAllBytes($bodyPath, (New-Object byte[] 16384))
+        $script:testServer = Start-TestHttpServer $bodyPath -ChunkDelayMilliseconds 300
+        $downloadRoot = Join-Path $TestDrive 'drip-download'
+        $null = New-Item -ItemType Directory -Path $downloadRoot
+        Import-Module (Join-Path $script:WinSpecRoot 'providers/bundled/common.psm1') -Force -Prefix Test
+        $timer = [Diagnostics.Stopwatch]::StartNew()
+        { Get-TestBundledDownload -Uri $script:testServer.Uri -Directory $downloadRoot -MaximumBytes 1MB -TimeoutSeconds 1 } | Should -Throw
+        $timer.Elapsed.TotalSeconds | Should -BeLessThan 2.5
+        @(Get-ChildItem -LiteralPath $downloadRoot -File).Count | Should -Be 0
+    }
+
+    It 'interrupts a stalled response body and removes its partial download (core=<Core>)' -ForEach @(
+        @{ Core = $false }, @{ Core = $true }
+    ) {
+        $bodyPath = Join-Path $TestDrive 'stalled.bin'
+        [IO.File]::WriteAllBytes($bodyPath, (New-Object byte[] 16384))
+        $script:testServer = Start-TestHttpServer $bodyPath -ChunkDelayMilliseconds 5000
+        $downloadRoot = Join-Path $TestDrive "stalled-download-$Core"
+        $null = New-Item -ItemType Directory -Path $downloadRoot
+        $before = @(Get-ChildItem -LiteralPath ([IO.Path]::GetTempPath()) -Filter 'winspec-script-*.ps1').FullName
+        $timer = [Diagnostics.Stopwatch]::StartNew()
+        if ($Core) {
+            { Invoke-ScriptAction -Configuration @{ Uri = $script:testServer.Uri; Sha256 = ('0' * 64) } -TimeoutSeconds 1 } | Should -Throw '*RemoteScriptTimeout*'
+        }
+        else {
+            Import-Module (Join-Path $script:WinSpecRoot 'providers/bundled/common.psm1') -Force -Prefix Test
+            { Get-TestBundledDownload -Uri $script:testServer.Uri -Directory $downloadRoot -MaximumBytes 1MB -TimeoutSeconds 1 } | Should -Throw '*DownloadTimeout*'
+        }
+        $timer.Elapsed.TotalSeconds | Should -BeLessThan 2.5
+        @(Get-ChildItem -LiteralPath $downloadRoot -File).Count | Should -Be 0
+        $after = @(Get-ChildItem -LiteralPath ([IO.Path]::GetTempPath()) -Filter 'winspec-script-*.ps1').FullName
+        @($after | Where-Object { $_ -notin $before }).Count | Should -Be 0
     }
 }
 
-Describe 'core remote Script execution' {
+Describe 'core remote Script execution' -Tag 'Boundary' {
     AfterEach {
         Stop-TestHttpServer $script:testServer
         $script:testServer = $null
+    }
+
+    It 'shares the download budget with its child without whole-second flooring' {
+        InModuleScope actions -Parameters @{ Root = $TestDrive } {
+            param($Root)
+            $script:Downloaded = Join-Path $Root 'remaining.ps1'
+            Set-Content -LiteralPath $script:Downloaded -Value 'exit 0'
+            Mock Get-RemoteScript {
+                param($DeadlineTimer)
+                $script:DownloadBudget = $DeadlineTimer
+                [pscustomobject]@{ Path = $script:Downloaded; DurationMilliseconds = 250; Integrity = 'Pinned'; RequestedUri = 'https://example.invalid/test'; FinalUri = 'https://example.invalid/test'; Size = 6; Digest = ('0' * 64); DigestVerified = $true }
+            }
+            Mock Invoke-PowerShellScript {
+                param($TimeoutSeconds, $DeadlineTimer)
+                $TimeoutSeconds | Should -Be 1
+                $DeadlineTimer | Should -BeOfType ([Diagnostics.Stopwatch])
+                [object]::ReferenceEquals($DeadlineTimer, $script:DownloadBudget) | Should -BeTrue
+                [pscustomobject]@{ Status = 'Succeeded'; ExitCode = 0; Stdout = ''; Stderr = ''; DurationMilliseconds = 1 }
+            }
+            $r = Invoke-ScriptAction -Configuration @{ Uri = 'https://example.invalid/test'; Sha256 = ('0' * 64) } -TimeoutSeconds 1
+            $r.Status | Should -Be Succeeded
+            Should -Invoke Invoke-PowerShellScript -Times 1 -Exactly
+            Test-Path -LiteralPath $script:Downloaded | Should -BeFalse
+        }
     }
 
     It 'streams and executes an HTTP Script when its digest is pinned' {

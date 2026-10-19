@@ -9,16 +9,15 @@ BeforeAll {
     Import-Module (Join-Path $winspecRoot "spec.psm1")                     -Force -Global
     Import-Module (Join-Path $winspecRoot "schema.psm1")                   -Force -Global
     Import-Module (Join-Path $winspecRoot "state.psm1")                    -Force -Global
-    Import-Module (Join-Path $winspecRoot "sandbox.psm1")                  -Force -Global
     Import-Module (Join-Path (Join-Path $winspecRoot "providers") "registry.psm1") -Force -Global
     Import-Module (Join-Path (Join-Path $winspecRoot "providers") "feature.psm1") -Force -Global
     Import-Module (Join-Path (Join-Path $winspecRoot "providers") "service.psm1") -Force -Global
 }
 
-Describe "Registry Provider" {
+Describe "Registry Provider" -Tag 'Unit' {
     Context "Provider contract" {
-        It "Should export sandbox apply function used by manager dispatcher" {
-            Get-Command Invoke-RegistrySandboxApply -ErrorAction SilentlyContinue | Should -Not -BeNullOrEmpty
+        It "Should export the live State setter used by the dispatcher" {
+            Get-Command Set-RegistryState -ErrorAction SilentlyContinue | Should -Not -BeNullOrEmpty
         }
 
         It "Should expose registry map metadata and allowed values" {
@@ -90,10 +89,10 @@ Describe "Registry Provider" {
     }
 }
 
-Describe "Feature Provider" {
+Describe "Feature Provider" -Tag 'Unit' {
     Context "Provider contract" {
-        It "Should export sandbox apply function used by manager dispatcher" {
-            Get-Command Invoke-FeatureSandboxApply -ErrorAction SilentlyContinue | Should -Not -BeNullOrEmpty
+        It "Should export the live State setter used by the dispatcher" {
+            Get-Command Set-FeatureState -ErrorAction SilentlyContinue | Should -Not -BeNullOrEmpty
         }
     }
 
@@ -196,10 +195,10 @@ Describe "Feature Provider" {
     }
 }
 
-Describe "Service Provider" {
+Describe "Service Provider" -Tag 'Unit' {
     Context "Provider contract" {
-        It "Should export sandbox apply function used by manager dispatcher" {
-            Get-Command Invoke-ServiceSandboxApply -ErrorAction SilentlyContinue | Should -Not -BeNullOrEmpty
+        It "Should export the live State setter used by the dispatcher" {
+            Get-Command Set-ServiceState -ErrorAction SilentlyContinue | Should -Not -BeNullOrEmpty
         }
 
         It "Should not export undefined legacy service helper APIs" {
@@ -383,75 +382,6 @@ Describe "Service Provider" {
 
                 $diffs | Where-Object Type -EQ "Removed" | Should -BeNullOrEmpty
             }
-        }
-    }
-}
-
-Describe "Sandbox Engine" {
-    BeforeEach {
-        InModuleScope sandbox -Parameters @{ Root = (Join-Path $TestDrive "sandbox") } {
-            param($Root)
-            $Script:SandboxRoot = $Root
-            $Script:SnapshotsDir = Join-Path $Root "snapshots"
-            $Script:HistoryDir = Join-Path $Root "history"
-            $Script:Sandbox = Join-Path $Root "sandbox.json"
-            $Script:SandboxContext = $null
-            Initialize-SandboxDirectory
-        }
-    }
-
-    AfterEach {
-        InModuleScope sandbox {
-            $Script:SandboxContext = $null
-            Remove-Item $Script:SandboxRoot -Recurse -Force -ErrorAction SilentlyContinue
-        }
-    }
-
-    It "Should hydrate sandbox mode from persisted context" {
-        InModuleScope sandbox {
-            Enter-Sandbox -Mode Mock | Out-Null
-            $Script:SandboxContext = $null
-
-            Get-SandboxMode | Should -Be "Mock"
-        }
-    }
-
-    It "Should persist sandbox state mutations before exit" {
-        InModuleScope sandbox {
-            Enter-Sandbox -Mode Mock | Out-Null
-            Update-SandboxState "Feature" { param($state) $state.TestFeature = "enabled"; return $state }
-            $Script:SandboxContext = $null
-
-            $state = Get-SandboxState -Provider "Feature"
-            $state.TestFeature | Should -Be "enabled"
-        }
-    }
-
-    It "Should seed registry mock state with public spec keys" {
-        InModuleScope sandbox {
-            $state = New-SandboxState
-
-            $state.Registry.Explorer.ContainsKey("ShowFileExt") | Should -BeTrue
-            $state.Registry.Explorer.ContainsKey("HideFileExt") | Should -BeFalse
-        }
-    }
-
-    It "Should simulate both service state and startup in sandbox" {
-        InModuleScope service {
-            Mock Test-SandboxActive { $true }
-        }
-        InModuleScope sandbox {
-            Enter-Sandbox -Mode Mock | Out-Null
-        }
-
-        InModuleScope service {
-            Invoke-ServiceSandbox -Desired @{ TestService = @{ State = "running"; Startup = "automatic" } } | Out-Null
-        }
-
-        InModuleScope sandbox {
-            $state = Get-SandboxState -Provider "Service"
-            $state.TestService.State | Should -Be "running"
-            $state.TestService.Startup | Should -Be "automatic"
         }
     }
 }

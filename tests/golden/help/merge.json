@@ -1,0 +1,45 @@
+{
+  "topic": "merge",
+  "summary": "Combine two data-only specifications without touching machine State.",
+  "usage": [
+    "winspec merge <base> <incoming> [-Output path] [-Strategy auto|union|ours|theirs] [-Force]"
+  ],
+  "options": [
+    {
+      "name": "-output",
+      "valueType": "String",
+      "repeatable": false
+    },
+    {
+      "name": "-strategy",
+      "valueType": "String",
+      "repeatable": false
+    },
+    {
+      "name": "-force",
+      "valueType": "Switch",
+      "repeatable": false
+    },
+    {
+      "name": "-json",
+      "valueType": "Switch",
+      "repeatable": false
+    },
+    {
+      "name": "-help",
+      "valueType": "Switch",
+      "repeatable": false
+    }
+  ],
+  "defaults": {
+    "selection": "Uses auto strategy and writes the merged data to stdout."
+  },
+  "effects": "Reads two specs and optionally writes one merged spec.",
+  "examples": [
+    "winspec merge .\\base.psd1 .\\incoming.psd1 -Output .\\merged.psd1"
+  ],
+  "related": [
+    "docs/api.md",
+    "docs/usage.md"
+  ]
+}

@@ -1,0 +1,1 @@
+{"command":"validate","diagnostics":[],"results":{"valid":true,"validation":{"mode":"Structural","subjects":[{"path":"Actions.activate","provider":"MicrosoftActivation","status":"NotRun"}]}},"schemaVersion":1,"status":"Succeeded"}

@@ -1,0 +1,7 @@
+DIFF diff -- 1 difference; no changes applied
+Spec: <SPEC>
+Against: <AGAINST>
+Selection: HumanState
+Resource Against Spec
+HumanState.value false true
+Exit 1 means differences were found, not command failure.

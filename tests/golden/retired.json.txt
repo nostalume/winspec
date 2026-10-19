@@ -1,0 +1,1 @@
+{"command":"sandbox","diagnostics":[{"code":"RetiredCommand","message":"RetiredCommand: sandbox was removed; use the selected command -DryRun for a bounded preview; existing sandbox files are not changed","severity":"error"}],"results":{},"schemaVersion":1,"status":"Failed"}

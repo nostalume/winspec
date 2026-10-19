@@ -1,0 +1,50 @@
+{
+  "topic": "diff",
+  "summary": "Compare declarative State only; Actions are never part of a diff.",
+  "usage": [
+    "winspec diff [spec] [-Against spec] [-Providers names] [-ProviderPath roots] [-Json]"
+  ],
+  "options": [
+    {
+      "name": "-against",
+      "valueType": "String",
+      "repeatable": false
+    },
+    {
+      "name": "-providers",
+      "valueType": "List",
+      "repeatable": true
+    },
+    {
+      "name": "-providerpath",
+      "valueType": "List",
+      "repeatable": true
+    },
+    {
+      "name": "-timeoutseconds",
+      "valueType": "Integer",
+      "repeatable": false
+    },
+    {
+      "name": "-json",
+      "valueType": "Switch",
+      "repeatable": false
+    },
+    {
+      "name": "-help",
+      "valueType": "Switch",
+      "repeatable": false
+    }
+  ],
+  "defaults": {
+    "selection": "Compares the selected/default spec with current machine State."
+  },
+  "effects": "Reads State and returns Different with exit 1; it never changes the machine.",
+  "examples": [
+    "winspec diff .\\machine.winspec.psd1 -Providers Registry"
+  ],
+  "related": [
+    "docs/api.md",
+    "docs/usage.md"
+  ]
+}

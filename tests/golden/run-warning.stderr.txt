@@ -1,0 +1,2 @@
+Child stderr (exit 0; not classified as failure):
+  notice only

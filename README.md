@@ -9,6 +9,15 @@ loads a `.ps1` spec, imports a third-party module during discovery, searches
 `PATH` for a provider, elevates itself, or turns an arbitrary command string into
 an implicit workflow.
 
+## 0.7.0
+
+This version improves command help, human-readable results, parameter admission,
+and managed-process safety. Machine-readable JSON contracts and external-provider
+process isolation are unchanged. The unused sandbox interface and ineffective
+flags are retired; see [migration guidance](docs/migration.md#cli-admission-and-sandbox-retirement)
+before upgrading scripts that used them. Human output is not a parsing interface;
+use `-Json` for automation.
+
 ## Requirements
 
 - Windows PowerShell 5.1 or PowerShell 7.
@@ -25,8 +34,10 @@ The source checkout can be invoked directly:
 If installed through Scoop, use `winspec` in the examples instead.
 
 `winspec help` introduces every command. Use `winspec help run` or
-`winspec run -Help` for a command's selection forms, effects, default, and minimal
-example.
+`winspec run -Help` for selection forms, typed options, defaults, conflicts,
+effects, examples and exits. Help does not load configuration or start providers.
+For an offline first run, follow the [safe CLI tour](docs/usage.md#offline-first-run)
+before choosing live State or downloaded Actions.
 
 ## PSD1 or JSON?
 
@@ -117,7 +128,10 @@ Capture publishes observed State as another data-only spec:
 ```
 
 Existing output requires `-Force`. Publication uses a temporary sibling and an
-atomic replacement. To request one Windows restore point immediately before a
+atomic move or authorized replacement. Without Force, even a destination created
+during publication is not overwritten. Locks or permissions can still make the
+operation fail; WinSpec does not delete the old file to retry. To request one
+Windows restore point immediately before a
 changing `apply`, add `-Checkpoint`. A Workflow may set `Checkpoint = $true` to
 create one checkpoint before its first effect. System Restore must already be
 available and the caller must already be privileged.
@@ -156,6 +170,13 @@ defines the manifest, operations, process API, and complete Action and State
 examples.
 
 ## Interaction, output, and trust
+
+Human output explains the command's scope: `PLAN` is a preview, `PARTIAL` means
+validation coverage is incomplete, `NO-WORK` means nothing was selected, and
+`DIFF` with exit 1 is a successful comparison with differences. `OK` does not
+prove post-apply convergence or completed system recovery. Read labeled failures
+on stderr; earlier child stdout can still be on stdout. See
+[results and exits](docs/usage.md#read-results-and-exits) for truncation and recovery.
 
 Noninteractive scripts and providers have bounded stdout/stderr, a timeout, and
 an exact immediate-child exit in the result. Interactive local Script Actions

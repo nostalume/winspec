@@ -1,0 +1,4 @@
+PLAN rollback -- no restore was requested
+Target selector: latest Windows restore point
+Target resolution: not checked
+Scope: DryRun does not prove the target exists or System Restore is available.

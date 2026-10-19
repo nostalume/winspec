@@ -1,0 +1,4 @@
+FAIL sandbox -- RetiredCommand
+Reason: global sandbox context is no longer supported.
+Next: use the selected command -DryRun; Script/provider previews have explicit limits.
+Existing sandbox files were not changed.

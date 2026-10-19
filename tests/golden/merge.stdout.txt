@@ -1,0 +1,7 @@
+OK merge -- merge completed; no file was written
+Base: <EMPTY>
+Incoming: <INCOMING>
+Strategy: auto
+Conflicts: 0
+Next: repeat with -Output <path> to publish a specification.
+      Use -Json to inspect the merged result document.

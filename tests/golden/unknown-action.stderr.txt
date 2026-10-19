@@ -1,0 +1,4 @@
+FAIL run -- UnknownAction
+Action: helo
+Spec: <SPEC>
+Next: winspec actions "<SPEC>"

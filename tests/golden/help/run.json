@@ -1,0 +1,67 @@
+{
+  "topic": "run",
+  "summary": "Execute or preview exactly one named, direct-provider, or Script Action.",
+  "usage": [
+    "winspec run <name> [-Spec spec] [-DryRun] [-Json] [-- arguments]",
+    "winspec run -Provider name [-ProviderPath roots] [-DryRun] [-Json] [-- arguments]",
+    "winspec run <path|uri> [-Interactive] [-Sha256 hex] [-DryRun] [-Json] [-- arguments]"
+  ],
+  "options": [
+    {
+      "name": "-spec",
+      "valueType": "String",
+      "repeatable": false
+    },
+    {
+      "name": "-provider",
+      "valueType": "String",
+      "repeatable": false
+    },
+    {
+      "name": "-providerpath",
+      "valueType": "List",
+      "repeatable": true
+    },
+    {
+      "name": "-interactive",
+      "valueType": "Switch",
+      "repeatable": false
+    },
+    {
+      "name": "-sha256",
+      "valueType": "String",
+      "repeatable": false
+    },
+    {
+      "name": "-dryrun",
+      "valueType": "Switch",
+      "repeatable": false
+    },
+    {
+      "name": "-timeoutseconds",
+      "valueType": "Integer",
+      "repeatable": false
+    },
+    {
+      "name": "-json",
+      "valueType": "Switch",
+      "repeatable": false
+    },
+    {
+      "name": "-help",
+      "valueType": "Switch",
+      "repeatable": false
+    }
+  ],
+  "defaults": {
+    "selection": "A name selects a configured Action; -Provider selects an ephemeral empty configuration."
+  },
+  "effects": "May execute provider or script code; -DryRun uses preview or returns an opaque plan.",
+  "examples": [
+    "winspec run -Provider MicrosoftActivation -DryRun -- /HWID"
+  ],
+  "related": [
+    "docs/api.md",
+    "docs/usage.md"
+  ]
+}

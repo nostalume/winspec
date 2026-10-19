@@ -1,0 +1,8 @@
+OK apply -- selected providers reported success
+Spec: <SPEC>
+Selection: HumanState
+Provider Result
+HumanState Succeeded
+Checkpoint: not requested
+Post-apply verification: not performed
+Scope: no Actions were run.

@@ -1,0 +1,4 @@
+FAIL run -- MissingOptionValue
+Option: -Spec
+Reason: expected a value.
+Next: winspec help run

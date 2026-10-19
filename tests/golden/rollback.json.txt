@@ -1,0 +1,1 @@
+{"command":"rollback","diagnostics":[],"results":{"last":true,"sequenceNumber":0},"schemaVersion":1,"status":"Planned"}

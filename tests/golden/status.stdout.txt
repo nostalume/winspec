@@ -1,0 +1,6 @@
+OK status -- observed 1 selected provider
+Spec: <SPEC>
+Selection: HumanState (from specification sections)
+Resource Observed
+HumanState.value false
+Scope: observation only; desired State was not compared.

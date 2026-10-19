@@ -2,7 +2,6 @@
 
 # Import dependent modules
 Import-Module (Join-Path $PSScriptRoot "..\windows.psm1")
-Import-Module (Join-Path $PSScriptRoot "..\sandbox.psm1") -ErrorAction SilentlyContinue
 
 $servicePolicy = Import-PowerShellDataFile `
 (Join-Path $PSScriptRoot 'service-policy.psd1')
@@ -288,70 +287,6 @@ function Compare-ServiceState {
     return $diffs.ToArray()
 }
 
-function Invoke-ServiceSandbox {
-    <#
-.SYNOPSIS
-Simulates Windows service configuration changes inside sandbox.
-#>
-
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)]
-        [hashtable]$Desired
-    )
-
-    if (-not (Test-SandboxActive)) {
-        throw "Sandbox not active"
-    }
-
-    $results = @{
-        Status = "Success"
-        Changed = @()
-    }
-
-    Update-SandboxState "Service" {
-
-        param($state)
-
-        if (-not $state) { $state = @{} }
-        foreach ($service in $Desired.Keys) {
-            if (-not $state[$service]) { $state[$service] = @{} }
-
-            foreach ($field in @("State", "Startup")) {
-                $desiredValue = $Desired[$service][$field]
-                if ($null -eq $desiredValue) { continue }
-
-                $currentValue = $state[$service][$field]
-                if ($currentValue -eq $desiredValue) { continue }
-
-                $results.Changed += @{
-                    Name = $service
-                    Field = $field
-                    OldValue = $currentValue
-                    NewValue = $desiredValue
-                }
-                $state[$service][$field] = $desiredValue
-            }
-        }
-
-        return $state
-    }
-
-    Update-SandboxChanges "Service" "Apply" $results
-
-    return $results
-}
-
-function Invoke-ServiceSandboxApply {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)]
-        [hashtable]$Desired
-    )
-
-    return Invoke-ServiceSandbox -Desired $Desired
-}
-
 Export-ModuleMember -Function @(
     "Get-ProviderInfo"
     "Get-ServiceState"
@@ -363,6 +298,4 @@ Export-ModuleMember -Function @(
     "Set-ServiceState"
     "Export-ServiceState"
     "Compare-ServiceState"
-    "Invoke-ServiceSandbox"
-    "Invoke-ServiceSandboxApply"
 )

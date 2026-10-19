@@ -1,0 +1,11 @@
+OK providers -- 7 implementations discovered (static)
+Name Kind Origin Operations
+Feature State Core capture, compare, apply
+MicrosoftActivation Action Bundled run, preview
+OfficeDeployment Action Bundled run, preview
+Registry State Core capture, compare, apply
+Script Action Core run, preview
+Service State Core capture, compare, apply
+WindowsDebloat Action Bundled run, preview
+Scope: discovery only; runtime dependencies and configured Actions were not checked.
+Next: winspec actions <spec>

@@ -6,6 +6,11 @@ executable-config loader, legacy provider importer, or automatic translation.
 
 ## Removed surfaces
 
+Human command output now uses labeled summaries/tables rather than internal JSON
+dumps. Do not parse that presentation: use `-Json` for the unchanged schema-version-1
+result envelope, machine statuses and command-specific result fields. `PARTIAL`
+and `NO-WORK` are human-only descriptions, not new JSON statuses.
+
 | Removed surface | Current replacement |
 | --- | --- |
 | `pull` | `capture` |
@@ -264,3 +269,42 @@ online installer, checks the Microsoft publisher, and saves or starts it; it is
 not an ODT XML configuration wrapper. See
 [Bundled Action providers](bundled-providers.md) for the complete current
 contracts.
+
+## CLI admission and sandbox retirement
+
+Command Help is now task-oriented: `winspec help` groups commands, and each topic
+lists accepted forms, typed options/defaults/conflicts, effects/limits, examples
+and exits. `help <command>` and `<command> -Help` are equivalent; the latter must
+not include operands/execution options (`-Json` is allowed). Missing/broken specs
+or catalogs do not block Help. Use the [offline first run](usage.md#offline-first-run)
+to exercise selection safely before returning to live automation.
+
+Help JSON keeps its existing schema, fields and prose values; expanded human Help
+is not new machine metadata. Human output is not a parsing interface. Migrate
+scripts to `-Json`, preserving the existing nested result/status/step Index
+contract rather than scraping headers or new option wrapping.
+
+The public `sandbox` command and `-Enter`, `-Exit`, `-List`, `-Mode`, and
+`-Snapshot` are removed, not aliases. They did not provide a global simulation
+boundary for Actions. Existing context/snapshot files are left untouched and do
+not change the CLI's execution policy. Review and back up legacy files separately
+if needed; invoking a current command does not migrate or delete them.
+
+Use the selected command's `-DryRun`, reading its limits first. A Script preview
+does not execute its contents or predict its internal changes. A provider preview
+may execute trusted provider code; it is not an OS security sandbox.
+
+`-Verbose` and `-Debug` previously did not enable diagnostics and now fail with
+`RetiredOption` (exit 2). Do not replace them with a hidden mode. Use supported
+command help and `-Json` result documents where appropriate.
+
+Commands now reject extra operands, repeated scalar/switch options, empty option
+values, and options that do not apply even when their value equals a default.
+Only `-Providers` and `-ProviderPath` may be repeated; repeated items are
+deduplicated. `-TimeoutSeconds` on structural-only `validate` is rejected; add
+`-PreviewActions` only if executing provider previews is intended.
+
+Keep WinSpec flags before `--`. After it, `-Json`, `-Help`, and other tokens are
+literal child arguments, not WinSpec options. A path named like an option must
+use a relative/absolute path prefix to avoid ambiguity. Fix invalid command lines
+instead of depending on last-wins or silently ignored input.

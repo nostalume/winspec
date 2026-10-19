@@ -5,7 +5,7 @@ BeforeAll {
         'examples/scripts/install-packages.ps1'
     $script:MigrationSpec = Join-Path $script:RepoRoot `
         'examples/package-install-migration.winspec.psd1'
-    $script:PwshPath = (Get-Command pwsh.exe -ErrorAction Stop).Source
+    $script:HostPath = (Get-Process -Id $PID).Path
 
     function Invoke-HostProcess {
         param([string]$HostPath, [string[]]$Arguments)
@@ -15,9 +15,9 @@ BeforeAll {
     }
 }
 
-Describe 'one-file PackageInstall migration' {
+Describe 'one-file PackageInstall migration' -Tag 'Flow' {
     It 'validates the data-only replacement and keeps interactive daily out of setup' {
-        $result = Invoke-HostProcess pwsh @(
+        $result = Invoke-HostProcess $script:HostPath @(
             '-File', $script:WinSpec, 'validate', $script:MigrationSpec, '-Json')
 
         $result.ExitCode | Should -Be 0
@@ -32,7 +32,7 @@ Describe 'one-file PackageInstall migration' {
     }
 
     It 'previews the ordinary Action as opaque without running package tools' {
-        $result = Invoke-HostProcess pwsh @(
+        $result = Invoke-HostProcess $script:HostPath @(
             '-File', $script:WinSpec, 'run', 'installPackages', '-Spec',
             $script:MigrationSpec, '-DryRun', '-Json')
 
@@ -42,13 +42,10 @@ Describe 'one-file PackageInstall migration' {
         $action.opaque | Should -BeTrue
     }
 
-    It 'splits comma-separated roles and invokes only their catalog entries' -ForEach @(
-        @{ HostPath = 'pwsh' }
-        @{ HostPath = 'powershell.exe' }
-    ) {
-        $bin = Join-Path $TestDrive ('bin-' + [IO.Path]::GetFileNameWithoutExtension($HostPath))
+    It 'splits comma-separated roles and invokes only their catalog entries' {
+        $bin = Join-Path $TestDrive ('bin-' + [IO.Path]::GetFileNameWithoutExtension($script:HostPath))
         $null = New-Item -ItemType Directory -Path $bin -Force
-        $log = Join-Path $TestDrive ('calls-' + [IO.Path]::GetFileNameWithoutExtension($HostPath))
+        $log = Join-Path $TestDrive ('calls-' + [IO.Path]::GetFileNameWithoutExtension($script:HostPath))
         foreach ($name in @('scoop', 'winget')) {
             Set-Content -LiteralPath (Join-Path $bin "$name.cmd") `
                 -Encoding Ascii -Value "@echo $name %*>>`"$log`"`r`n@exit /b 0"
@@ -56,7 +53,7 @@ Describe 'one-file PackageInstall migration' {
         $oldPath = $env:PATH
         try {
             $env:PATH = $bin + [IO.Path]::PathSeparator + $oldPath
-            $result = Invoke-HostProcess $HostPath @(
+            $result = Invoke-HostProcess $script:HostPath @(
                 '-File', $script:InstallScript, '-Roles', ' dev, backup ')
         }
         finally {
@@ -72,11 +69,8 @@ Describe 'one-file PackageInstall migration' {
             Should -Be 0
     }
 
-    It 'rejects the undefined legacy utils role without starting a package tool' -ForEach @(
-        @{ HostPath = 'pwsh' }
-        @{ HostPath = 'powershell.exe' }
-    ) {
-        $result = Invoke-HostProcess $HostPath @(
+    It 'rejects the undefined legacy utils role without starting a package tool' {
+        $result = Invoke-HostProcess $script:HostPath @(
             '-File', $script:InstallScript, '-Roles', 'utils')
 
         $result.ExitCode | Should -Be 2
@@ -92,7 +86,7 @@ Describe 'one-file PackageInstall migration' {
         $oldPath = $env:PATH
         try {
             $env:PATH = $bin
-            $result = Invoke-HostProcess $script:PwshPath @(
+            $result = Invoke-HostProcess $script:HostPath @(
                 '-File', $script:InstallScript, '-Roles', 'dev')
         }
         finally {

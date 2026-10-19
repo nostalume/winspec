@@ -1,0 +1,5 @@
+OK run [Script] -- child completed successfully
+Source: <ROOT>\warning.ps1
+Child exit: 0
+Child stdout:
+  payload

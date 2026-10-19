@@ -1,0 +1,8 @@
+PLAN run [HumanAction] -- provider preview returned Planned
+Selection: direct provider; empty configuration
+Operation: preview (trusted provider code was started)
+Provider output:
+Key Value
+alpha reported
+details.enabled true
+Scope: preview is not an OS security sandbox.

@@ -1,0 +1,1 @@
+{"command":"run","diagnostics":[],"results":{"actions":[{"provider":"HumanAction","result":{"diagnostics":[],"output":{"alpha":"reported","arguments":["secret-argument"],"details":{"enabled":true}},"protocolVersion":1,"requestId":"<REQUEST-ID>","status":"Planned"}}]},"schemaVersion":1,"status":"Planned"}
